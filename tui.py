@@ -34,6 +34,7 @@ from allstarlink_stats import (fetch_node_summary, fetch_connected_nodes,
 ENV_PATH = ".env"
 FAVORITES_PATH = "favorites.json"
 CONNECTED_REFRESH_SECONDS = 15
+LINK_GRACE_SECONDS = 30  # > the API's observed worst-case connect/disconnect lag
 
 # (env key, display label, mask value on screen)
 FIELDS = [
@@ -241,6 +242,7 @@ class App:
         self.connected_nodes = []
         self.connected_refreshing = False
         self.last_connected_refresh = 0.0
+        self.link_lock_until = 0.0  # suppress refreshes until this time
         self.monitor_selected = 0  # selection within the connected-nodes panel
         self.nodes_selected = 0
         self.nodes_add_mode = False
@@ -316,6 +318,14 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def refresh_connected_nodes(self, force=False):
+        # Hard lock, not just a nudged timestamp: the public stats API
+        # has been observed lagging up to ~25s behind a real disconnect
+        # (and connect isn't guaranteed fast either) -- longer than our
+        # own refresh interval. Any refresh at all (periodic or forced)
+        # during this window would risk overwriting start_link()'s
+        # correct optimistic update with the API's still-stale answer.
+        if time.time() < self.link_lock_until:
+            return
         due = time.time() - self.last_connected_refresh > \
             CONNECTED_REFRESH_SECONDS
         if self.connected_refreshing or not (force or due):
@@ -482,7 +492,14 @@ class App:
                         self.node_info_cache[node] = info
                         self.connected_nodes = self.connected_nodes + [entry]
                     self.link_status = f"connected to {node}"
-                self.last_connected_refresh = time.time()
+                # Suppress any refresh (periodic or forced) for a while
+                # -- longer than the API's observed worst-case lag --
+                # so it doesn't overwrite this optimistic update with a
+                # still-stale response. Deliberately NOT touching
+                # last_connected_refresh: once the lock lifts, the
+                # normal due-check should fire an immediate re-sync
+                # rather than waiting out another full interval.
+                self.link_lock_until = time.time() + LINK_GRACE_SECONDS
             finally:
                 self.link_busy = False
 
