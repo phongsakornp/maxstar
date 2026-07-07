@@ -6,9 +6,9 @@ softphone. Built because Zoiper Classic is discontinued, Zoiper 5 gates
 setup behind a cloud-account wizard with no Thailand provider, and
 droidstar-enhanced's PTT doesn't speak app_rpt's actual keying protocol.
 
-Named after `maxwell` (the Pi hosting the node) + AllStar. A UI is
-planned, and a radio module may be attached to the Pi later; this client
-is meant to keep working as the control surface either way.
+Named after the Pi hosting the node + AllStar. A UI is planned, and a
+radio module may be attached to the Pi later; this client is meant to
+keep working as the control surface either way.
 
 ## Setup
 
@@ -38,7 +38,7 @@ transfer = no
 
 The account lives in `/etc/asterisk/custom/iax/iaxclient-users.conf`:
 ```
-[macbook](iaxclient)
+[<YOUR_USERNAME>](iaxclient)
 secret = <set on the Pi — never commit this>
 requirecalltoken = no
 callerid = "LISTENER"
@@ -50,10 +50,10 @@ normally require.)
 The dial context in `/etc/asterisk/extensions.conf`:
 ```
 [iax-client]
-exten => 42865,1,rpt(42865,X)
+exten => <YOUR_NODE>,1,rpt(<YOUR_NODE>,X)
 ```
-Dialing your own node number (`42865`) connects you as the node's radio
-input — see "Single-seat connections" below.
+Dialing your own node number (`<YOUR_NODE>`) connects you as the node's
+radio input — see "Single-seat connections" below.
 
 ## Usage
 
@@ -66,10 +66,10 @@ cp .env.example .env
 `.env` is gitignored — it's read automatically on startup (falls back
 to a real `MAXSTAR_SECRET` env var if no `.env` is present, and either
 is overridden by an inline `--secret` if you'd rather pass it that way).
-Defaults connect to `192.168.1.156:4569` as user `macbook` → node
-`42865`. Override with `--host`, `--port`, `--user`, `--node`,
-`--context` as needed. Never hardcode the secret as a default in
-source — it gets picked up by git otherwise.
+Defaults connect to `<YOUR_NODE_IP>:4569` as user `<YOUR_USERNAME>` →
+node `<YOUR_NODE>`. Override with `--host`, `--port`, `--user`,
+`--node`, `--context` as needed. Never hardcode the secret as a default
+in source — it gets picked up by git otherwise.
 
 Interactive commands once connected:
 - `k` — key up, start sending mic audio
@@ -126,9 +126,9 @@ links, not back to the one occupying the radio seat.
 
 ## Confirmed working
 
-Node `42865` was linked to `68777`, a real busy node, and its live
-traffic was heard through this client — connecting to and hearing
-another node, entirely without radio hardware.
+The node was linked to another real, busy node, and its live traffic
+was heard through this client — connecting to and hearing another
+node, entirely without radio hardware.
 
 ## Known rough edges
 
