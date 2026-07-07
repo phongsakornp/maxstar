@@ -1,4 +1,4 @@
-# maxshack
+# maxstar
 
 A minimal, hand-rolled IAX2 client (`iax_client.py`) for connecting to an
 AllStarLink node from a Mac without any radio hardware or third-party
@@ -6,10 +6,9 @@ softphone. Built because Zoiper Classic is discontinued, Zoiper 5 gates
 setup behind a cloud-account wizard with no Thailand provider, and
 droidstar-enhanced's PTT doesn't speak app_rpt's actual keying protocol.
 
-Named after `maxwell`, the Pi hosting the node — this is the "shack"
-(operator control point) for it. A UI is planned, and a radio module may
-be attached to the Pi later; this client is meant to keep working as the
-control surface either way.
+Named after `maxwell` (the Pi hosting the node) + AllStar. A UI is
+planned, and a radio module may be attached to the Pi later; this client
+is meant to keep working as the control surface either way.
 
 See `../docs/allstarlink-listen-without-radio.md` for the full story
 (dead ends tried, node-side config, why keying works the way it does).
