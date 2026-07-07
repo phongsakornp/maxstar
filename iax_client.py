@@ -465,6 +465,57 @@ class IaxCall:
         self.hungup.set()
 
 
+DTMF_FREQS = {
+    "1": (697, 1209), "2": (697, 1336), "3": (697, 1477), "A": (697, 1633),
+    "4": (770, 1209), "5": (770, 1336), "6": (770, 1477), "B": (770, 1633),
+    "7": (852, 1209), "8": (852, 1336), "9": (852, 1477), "C": (852, 1633),
+    "*": (941, 1209), "0": (941, 1336), "#": (941, 1477), "D": (941, 1633),
+}
+
+
+def gen_dtmf_digit(digit, seconds=0.12, amplitude=10000):
+    """Real dual-tone audio for one DTMF digit, as u-law chunks -- this is
+    decoded by app_rpt's function-code DTMF detector on the rxchannel
+    audio, the same as a radio operator dialing *3<node> on their radio's
+    keypad. Distinct from the IAX2-level DTMF frame type, which app_rpt
+    only honors in phone-control ("P") mode."""
+    f1, f2 = DTMF_FREQS[digit.upper()]
+    n_samples = int(SAMPLE_RATE * seconds)
+    t = np.arange(n_samples)
+    pcm = (amplitude / 2 * np.sin(2 * np.pi * f1 * t / SAMPLE_RATE) +
+           amplitude / 2 * np.sin(2 * np.pi * f2 * t / SAMPLE_RATE))
+    pcm = pcm.astype(np.int16)
+    pcm_bytes = pcm.tobytes()
+    chunk_bytes = FRAME_SAMPLES * 2
+    chunks = [pcm_bytes[i:i + chunk_bytes]
+              for i in range(0, len(pcm_bytes), chunk_bytes)]
+    return [audioop.lin2ulaw(c, 2) for c in chunks if len(c) == chunk_bytes]
+
+
+def gen_silence(seconds):
+    n_frames = int(seconds * SAMPLE_RATE / FRAME_SAMPLES)
+    return [audioop.lin2ulaw(b"\x00\x00" * FRAME_SAMPLES, 2)] * n_frames
+
+
+def send_dtmf_function(call: "IaxCall", digits: str,
+                        tone_seconds=0.12, gap_seconds=0.10):
+    """Key up, dial an app_rpt function code (e.g. '*3592525' to connect
+    transceive to node 592525, '*1592525' to disconnect it) as real DTMF
+    tone audio, then unkey. Blocks for the duration of the sequence."""
+    was_keyed = call.keyed.is_set()
+    call.keyed.set()
+    time.sleep(0.3)  # let the newkey/keyup settle before tones start
+    for digit in digits:
+        for chunk in gen_dtmf_digit(digit, tone_seconds):
+            call._send_voice(chunk)
+            time.sleep(FRAME_SAMPLES / SAMPLE_RATE)
+        for chunk in gen_silence(gap_seconds):
+            call._send_voice(chunk)
+            time.sleep(FRAME_SAMPLES / SAMPLE_RATE)
+    if not was_keyed:
+        call.keyed.clear()
+
+
 def gen_tone(seconds: float, freq: int = 1000, amplitude: int = 12000):
     """Generate a synthetic sine tone as a list of 160-sample u-law chunks,
     for self-test injection that doesn't depend on mic/ambient audio."""
@@ -570,6 +621,11 @@ def main():
                           "synthetic tone, then hang up.")
     ap.add_argument("--listen", type=float, default=None,
                      help="Connect and just listen/report for N seconds.")
+    ap.add_argument("--link", default=None,
+                     help="Send an app_rpt DTMF function code, e.g. "
+                          "'*3592525' to connect transceive to node "
+                          "592525, '*1592525' to disconnect it, then "
+                          "hang up.")
     ap.add_argument("--verbose", action="store_true",
                      help="Print raw [TX]/[RX] IAX2 frame trace (noisy; "
                           "useful for protocol-level debugging only).")
@@ -606,6 +662,15 @@ def main():
         return
     if args.listen is not None:
         run_listen_report(call, args.listen)
+        call.hangup()
+        time.sleep(0.3)
+        return
+    if args.link is not None:
+        print("[*] Waiting 2.5s for the newkey handshake to settle...")
+        time.sleep(2.5)
+        print(f"[*] Sending function code {args.link!r}...")
+        send_dtmf_function(call, args.link)
+        print("[*] Done.")
         call.hangup()
         time.sleep(0.3)
         return

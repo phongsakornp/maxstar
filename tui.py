@@ -23,7 +23,7 @@ import os
 import sys
 import threading
 
-from iax_client import IaxCall, load_dotenv
+from iax_client import IaxCall, load_dotenv, send_dtmf_function
 
 ENV_PATH = ".env"
 
@@ -203,6 +203,11 @@ class App:
         self.rx_peak = 0.0
         self.tx_peak = 0.0
 
+        self.link_mode = None   # None, "connect", or "disconnect"
+        self.link_buf = ""
+        self.link_status = ""
+        self.link_busy = False
+
         required = ("MAXSTAR_HOST", "MAXSTAR_USER", "MAXSTAR_SECRET",
                     "MAXSTAR_NODE")
         self.view = "monitor" if all(self.config[k] for k in required) \
@@ -240,6 +245,7 @@ class App:
         self.connect()
 
     def run(self):
+        curses.set_escdelay(25)  # default ~1000ms makes Esc feel unresponsive
         init_colors()
         curses.curs_set(0)
         self.stdscr.nodelay(True)
@@ -282,6 +288,9 @@ class App:
         return self.handle_monitor_key(ch)
 
     def handle_monitor_key(self, ch):
+        if self.link_mode is not None:
+            return self.handle_link_key(ch)
+
         if ch in (ord("q"), ord("Q")):
             return False
         elif ch in (ord("k"), ord("K")):
@@ -293,7 +302,50 @@ class App:
         elif ch in (ord("c"), ord("C")):
             self.view = "config"
             self.selected = 0
+        elif ch in (ord("l"), ord("L")):
+            if self.call and not self.link_busy:
+                self.link_mode = "connect"
+                self.link_buf = ""
+        elif ch in (ord("d"), ord("D")):
+            if self.call and not self.link_busy:
+                self.link_mode = "disconnect"
+                self.link_buf = ""
         return True
+
+    def handle_link_key(self, ch):
+        if ch == 27:  # Esc cancels
+            self.link_mode = None
+            self.link_buf = ""
+        elif ch in (curses.KEY_ENTER, 10, 13):
+            if self.link_buf:
+                self.start_link(self.link_mode, self.link_buf)
+            self.link_mode = None
+            self.link_buf = ""
+        elif ch in (curses.KEY_BACKSPACE, 127, 8):
+            self.link_buf = self.link_buf[:-1]
+        elif ord("0") <= ch <= ord("9"):
+            self.link_buf += chr(ch)
+        return True
+
+    def start_link(self, mode, node):
+        """Dial the app_rpt function code for connect/disconnect as real
+        DTMF tone audio, in the background so the UI stays responsive."""
+        call = self.call
+        func = "3" if mode == "connect" else "1"
+        digits = f"*{func}{node}"
+        self.link_busy = True
+        self.link_status = f"sending {digits} ..."
+
+        def worker():
+            try:
+                send_dtmf_function(call, digits)
+                self.link_status = (
+                    f"{'connected to' if mode == 'connect' else 'disconnect sent for'} "
+                    f"{node}")
+            finally:
+                self.link_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def handle_config_key(self, ch):
         if self.editing:
@@ -370,7 +422,7 @@ class App:
     def draw_monitor(self):
         stdscr = self.stdscr
         cfg = self.config
-        height = 17
+        height = 19
         draw_box(stdscr, 0, 0, height, PANEL_WIDTH, title="MAXSTAR")
 
         status_colors = {"connected": CP_GREEN, "connecting": CP_YELLOW,
@@ -407,8 +459,21 @@ class App:
         draw_meter(stdscr, 13, 2, METER_WIDTH, self.tx_display,
                    self.tx_peak, "TX")
 
+        if self.link_mode is not None:
+            label = ("CONNECT to node: " if self.link_mode == "connect"
+                      else "DISCONNECT node: ")
+            safe_addstr(stdscr, 16, 2, f"{label}{self.link_buf}_",
+                        curses.color_pair(CP_YELLOW) | curses.A_BOLD)
+        elif self.link_busy:
+            safe_addstr(stdscr, 16, 2, f"» {self.link_status}",
+                        curses.color_pair(CP_YELLOW) | curses.A_BOLD)
+        elif self.link_status:
+            safe_addstr(stdscr, 16, 2, f"» {self.link_status}",
+                        curses.color_pair(CP_GREEN))
+
         safe_addstr(stdscr, height - 2, 2,
-                    "k key  u unkey  c config  q quit",
+                    "k key  u unkey  l link  d disconnect  "
+                    "c config  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
 
