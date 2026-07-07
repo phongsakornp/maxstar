@@ -454,9 +454,29 @@ class App:
         def worker():
             try:
                 send_dtmf_function(call, digits)
-                self.link_status = (
-                    f"{'connected to' if mode == 'connect' else 'disconnect sent for'} "
-                    f"{node}")
+                # Update our own view of connected_nodes immediately --
+                # the public stats API can lag 10-25s (observed) before
+                # it reflects a disconnect, so waiting on the next
+                # periodic refresh left a disconnected node visible for
+                # a long time. Also push the refresh timer out so that
+                # slow-to-update API response doesn't immediately
+                # overwrite this with stale data.
+                if mode == "disconnect":
+                    self.connected_nodes = [n for n in self.connected_nodes
+                                            if n["number"] != node]
+                    self.link_status = f"disconnected {node}"
+                else:
+                    if not any(n["number"] == node
+                               for n in self.connected_nodes):
+                        info = (self.node_info_cache.get(node) or
+                                fetch_node_summary(node) or
+                                {"callsign": "", "location": "",
+                                 "sitename": "", "affiliation": ""})
+                        entry = dict(info, number=node)
+                        self.node_info_cache[node] = info
+                        self.connected_nodes = self.connected_nodes + [entry]
+                    self.link_status = f"connected to {node}"
+                self.last_connected_refresh = time.time()
             finally:
                 self.link_busy = False
 
