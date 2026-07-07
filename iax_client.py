@@ -51,6 +51,7 @@ def load_dotenv(path=".env"):
 FRAME_DTMF_END = 1
 FRAME_VOICE = 2
 FRAME_CONTROL = 4
+FRAME_DTMF_BEGIN = 12
 FRAME_IAX = 6
 FRAME_TEXT = 7
 
@@ -281,6 +282,15 @@ class IaxCall:
     def send_dtmf(self, digit: str):
         self._send_full(FRAME_DTMF_END, ord(digit))
 
+    def send_dtmf_pulse(self, digit: str, duration=0.12):
+        """Native IAX2 DTMF signaling (BEGIN then END), as opposed to
+        encoding the digit as actual dual-tone audio in voice frames.
+        Asterisk's DTMF duration tracking expects a BEGIN/END pair --
+        send_dtmf() alone only ever sent a bare END with no BEGIN."""
+        self._send_full(FRAME_DTMF_BEGIN, ord(digit))
+        time.sleep(duration)
+        self._send_full(FRAME_DTMF_END, ord(digit))
+
     # ---- handshake --------------------------------------------------
 
     def connect(self, timeout=8.0) -> bool:
@@ -465,55 +475,22 @@ class IaxCall:
         self.hungup.set()
 
 
-DTMF_FREQS = {
-    "1": (697, 1209), "2": (697, 1336), "3": (697, 1477), "A": (697, 1633),
-    "4": (770, 1209), "5": (770, 1336), "6": (770, 1477), "B": (770, 1633),
-    "7": (852, 1209), "8": (852, 1336), "9": (852, 1477), "C": (852, 1633),
-    "*": (941, 1209), "0": (941, 1336), "#": (941, 1477), "D": (941, 1633),
-}
-
-
-def gen_dtmf_digit(digit, seconds=0.12, amplitude=10000):
-    """Real dual-tone audio for one DTMF digit, as u-law chunks -- this is
-    decoded by app_rpt's function-code DTMF detector on the rxchannel
-    audio, the same as a radio operator dialing *3<node> on their radio's
-    keypad. Distinct from the IAX2-level DTMF frame type, which app_rpt
-    only honors in phone-control ("P") mode."""
-    f1, f2 = DTMF_FREQS[digit.upper()]
-    n_samples = int(SAMPLE_RATE * seconds)
-    t = np.arange(n_samples)
-    pcm = (amplitude / 2 * np.sin(2 * np.pi * f1 * t / SAMPLE_RATE) +
-           amplitude / 2 * np.sin(2 * np.pi * f2 * t / SAMPLE_RATE))
-    pcm = pcm.astype(np.int16)
-    pcm_bytes = pcm.tobytes()
-    chunk_bytes = FRAME_SAMPLES * 2
-    chunks = [pcm_bytes[i:i + chunk_bytes]
-              for i in range(0, len(pcm_bytes), chunk_bytes)]
-    return [audioop.lin2ulaw(c, 2) for c in chunks if len(c) == chunk_bytes]
-
-
-def gen_silence(seconds):
-    n_frames = int(seconds * SAMPLE_RATE / FRAME_SAMPLES)
-    return [audioop.lin2ulaw(b"\x00\x00" * FRAME_SAMPLES, 2)] * n_frames
-
-
 def send_dtmf_function(call: "IaxCall", digits: str,
-                        tone_seconds=0.12, gap_seconds=0.10):
-    """Key up, dial an app_rpt function code (e.g. '*3592525' to connect
-    transceive to node 592525, '*1592525' to disconnect it) as real DTMF
-    tone audio, then unkey. Blocks for the duration of the sequence."""
-    was_keyed = call.keyed.is_set()
-    call.keyed.set()
-    time.sleep(0.3)  # let the newkey/keyup settle before tones start
+                        digit_seconds=0.2, gap_seconds=0.15):
+    """Dial an app_rpt function code (e.g. '*3592525' to connect
+    transceive to node 592525, '*1592525' to disconnect it) using native
+    IAX2 DTMF signaling (BEGIN/END frame pairs via send_dtmf_pulse()).
+
+    This is NOT encoded as audio-tone DTMF in voice frames -- that was
+    tried first and confirmed NOT to work here: app_rpt's function-code
+    decoder for this connection type listens for actual IAX2 DTMF frame
+    events, not in-band tone detection on the rxchannel audio. Verified
+    live: connect/disconnect against a real node (AllStarLink's public
+    Parrot+ test node, 55553) both worked with this approach after the
+    audio-tone version produced no link at all."""
     for digit in digits:
-        for chunk in gen_dtmf_digit(digit, tone_seconds):
-            call._send_voice(chunk)
-            time.sleep(FRAME_SAMPLES / SAMPLE_RATE)
-        for chunk in gen_silence(gap_seconds):
-            call._send_voice(chunk)
-            time.sleep(FRAME_SAMPLES / SAMPLE_RATE)
-    if not was_keyed:
-        call.keyed.clear()
+        call.send_dtmf_pulse(digit, digit_seconds)
+        time.sleep(gap_seconds)
 
 
 def gen_tone(seconds: float, freq: int = 1000, amplitude: int = 12000):
@@ -670,6 +647,7 @@ def main():
         time.sleep(2.5)
         print(f"[*] Sending function code {args.link!r}...")
         send_dtmf_function(call, args.link)
+        time.sleep(0.5)  # let the last digit's END frame land before hangup
         print("[*] Done.")
         call.hangup()
         time.sleep(0.3)

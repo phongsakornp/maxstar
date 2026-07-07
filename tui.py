@@ -405,8 +405,9 @@ class App:
         return True
 
     def start_link(self, mode, node):
-        """Dial the app_rpt function code for connect/disconnect as real
-        DTMF tone audio, in the background so the UI stays responsive."""
+        """Dial the app_rpt function code for connect/disconnect via
+        native IAX2 DTMF signaling, in the background so the UI stays
+        responsive while it's happening."""
         call = self.call
         func = "3" if mode == "connect" else "1"
         digits = f"*{func}{node}"
