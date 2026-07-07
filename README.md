@@ -106,9 +106,12 @@ screen instead of connecting blind:
   to the selected node, `x` disconnects it. Favorites persist in
   `favorites.json` (gitignored, like `.env` — personal, not project
   data). Connect/disconnect both dial the node's real app_rpt function
-  code (`*3<node>`/`*1<node>`) as DTMF tone audio — the same mechanism
-  a radio operator dialing it on their keypad uses, confirmed against
-  this node's own `rpt.conf` functions table rather than assumed.
+  code (`*3<node>`/`*1<node>`) via native IAX2 DTMF signaling (BEGIN/END
+  frame pairs) — confirmed against this node's own `rpt.conf` functions
+  table rather than assumed. Not audio-tone DTMF: that was tried first
+  and confirmed not to work here, since this connection's function-code
+  decoder listens for actual DTMF frame events, not in-band tone
+  detection on the rxchannel audio.
 
 `iax_client.py`'s own `print()` diagnostics are silenced while the TUI
 is running (they'd otherwise corrupt curses' control of the screen) —
