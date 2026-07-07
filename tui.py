@@ -44,8 +44,9 @@ FIELDS = [
     ("MAXSTAR_CONTEXT", "Context", False),
 ]
 
-PANEL_WIDTH = 62
-METER_WIDTH = 48
+MIN_WIDTH = 50
+MIN_HEIGHT = 20
+METER_MAX_WIDTH = 100  # cap so an ultra-wide terminal doesn't look silly
 METER_DECAY = 0.80    # per-tick decay of the main (fast) meter fill
 PEAK_DECAY = 0.985     # per-tick decay of the slow peak-hold marker
 FULL_SCALE = 32767
@@ -350,7 +351,7 @@ class App:
     # ---- input ------------------------------------------------------
 
     def handle_key(self, ch):
-        if ch == -1:
+        if ch == -1 or ch == curses.KEY_RESIZE:
             return True
         if self.view == "config":
             return self.handle_config_key(ch)
@@ -522,11 +523,17 @@ class App:
 
     def draw(self):
         self.stdscr.erase()
+        self.refresh_connected_nodes()  # kept fresh regardless of view
+        height, width = self.stdscr.getmaxyx()
         try:
-            if self.view == "config":
+            if height < MIN_HEIGHT or width < MIN_WIDTH:
+                safe_addstr(self.stdscr, 0, 0,
+                            f"Terminal too small ({width}x{height}) -- "
+                            f"resize to at least {MIN_WIDTH}x{MIN_HEIGHT}",
+                            curses.color_pair(CP_YELLOW) | curses.A_BOLD)
+            elif self.view == "config":
                 self.draw_config()
             elif self.view == "nodes":
-                self.refresh_connected_nodes()
                 self.draw_nodes()
             else:
                 self.draw_monitor()
@@ -536,7 +543,8 @@ class App:
 
     def draw_config(self):
         stdscr = self.stdscr
-        draw_box(stdscr, 0, 0, 12, PANEL_WIDTH, title="MAXSTAR CONFIG")
+        height, width = stdscr.getmaxyx()
+        draw_box(stdscr, 0, 0, height, width, title="MAXSTAR CONFIG")
         safe_addstr(stdscr, 1, 2,
                     "↑/↓ select  Enter edit  s save+connect  "
                     "Esc back  q quit",
@@ -561,19 +569,26 @@ class App:
                           else curses.color_pair(CP_TEXT))
             safe_addstr(stdscr, row, 2 + 14, display, value_attr)
 
-    def _node_line(self, node):
-        info = self.node_info_cache.get(node)
-        if node in self.fetching_nodes and info is None:
-            return f"{node:<8} loading..."
+    @staticmethod
+    def _format_node_summary(node, info, max_width=200):
         if info is None:
             return f"{node:<8} (unknown -- lookup failed)"
         bits = [info["callsign"], info["location"], info["sitename"],
                 info["affiliation"]]
         detail = "  ".join(b for b in bits if b)
-        return f"{node:<8} {detail}"[:PANEL_WIDTH - 6]
+        return f"{node:<8} {detail}"[:max_width]
+
+    def _node_line(self, node, max_width=200):
+        """For favorites: look up cached info fetched separately, since
+        we only have the bare node number until fetch_node_info() runs."""
+        if node in self.fetching_nodes and node not in self.node_info_cache:
+            return f"{node:<8} loading..."
+        return self._format_node_summary(
+            node, self.node_info_cache.get(node), max_width)
 
     def draw_nodes(self):
         stdscr = self.stdscr
+        height, width = stdscr.getmaxyx()
         rows = self._node_rows()
         # (text, attr, selectable_index or None)
         lines = []
@@ -587,12 +602,14 @@ class App:
                        + ("  refreshing..." if self.connected_refreshing
                           else ""),
                        curses.color_pair(CP_CYAN) | curses.A_BOLD, None))
+        line_width = max(20, width - 10)
         idx = 0
         if not self.connected_nodes:
             lines.append(("  (none)", curses.color_pair(CP_DIM) |
                           curses.A_DIM, None))
         for n in self.connected_nodes:
-            lines.append((self._node_line(n["number"]), None, idx))
+            text = self._format_node_summary(n["number"], n, line_width)
+            lines.append((text, None, idx))
             idx += 1
         lines.append(("", 0, None))
         lines.append(("FAVORITES", curses.color_pair(CP_CYAN) |
@@ -601,7 +618,7 @@ class App:
             lines.append(("  (none yet -- press 'a' to add a node)",
                           curses.color_pair(CP_DIM) | curses.A_DIM, None))
         for n in self.favorites:
-            lines.append((self._node_line(n), None, idx))
+            lines.append((self._node_line(n, line_width), None, idx))
             idx += 1
         if self.nodes_add_mode:
             lines.append((f"  add favorite, node #: {self.nodes_add_buf}_",
@@ -615,8 +632,7 @@ class App:
             lines.append((msg, curses.color_pair(CP_YELLOW) |
                           curses.A_BOLD, None))
 
-        height = len(lines) + 3
-        draw_box(stdscr, 0, 0, height, PANEL_WIDTH, title="NODES")
+        draw_box(stdscr, 0, 0, height, width, title="NODES")
         for i, (text, attr, sel_idx) in enumerate(lines):
             row = 1 + i
             if sel_idx is not None:
@@ -632,14 +648,14 @@ class App:
     def draw_monitor(self):
         stdscr = self.stdscr
         cfg = self.config
-        height = 19
-        draw_box(stdscr, 0, 0, height, PANEL_WIDTH, title="MAXSTAR")
+        height, width = stdscr.getmaxyx()
+        draw_box(stdscr, 0, 0, height, width, title="MAXSTAR")
 
         status_colors = {"connected": CP_GREEN, "connecting": CP_YELLOW,
                           "failed": CP_RED, "disconnected": CP_DIM}
         status_attr = curses.color_pair(
             status_colors.get(self.status, CP_DIM)) | curses.A_BOLD
-        safe_addstr(stdscr, 1, PANEL_WIDTH - len(self.status) - 4,
+        safe_addstr(stdscr, 1, width - len(self.status) - 4,
                     f"[{self.status.upper()}]", status_attr)
 
         safe_addstr(stdscr, 1, 2,
@@ -664,9 +680,10 @@ class App:
         self.rx_peak = max(rx_instant, self.rx_peak * PEAK_DECAY)
         self.tx_peak = max(tx_instant, self.tx_peak * PEAK_DECAY)
 
-        draw_meter(stdscr, 10, 2, METER_WIDTH, self.rx_display,
+        meter_width = max(20, min(width - 24, METER_MAX_WIDTH))
+        draw_meter(stdscr, 10, 2, meter_width, self.rx_display,
                    self.rx_peak, "RX")
-        draw_meter(stdscr, 13, 2, METER_WIDTH, self.tx_display,
+        draw_meter(stdscr, 13, 2, meter_width, self.tx_display,
                    self.tx_peak, "TX")
 
         if self.link_mode is not None:
@@ -681,10 +698,48 @@ class App:
             safe_addstr(stdscr, 16, 2, f"» {self.link_status}",
                         curses.color_pair(CP_GREEN))
 
+        self.draw_connected_panel(18, height - 3, width)
+
         safe_addstr(stdscr, height - 2, 2,
                     "k key  u unkey  l link  d disc  n nodes  "
                     "c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
+
+    def draw_connected_panel(self, top, bottom, width):
+        """Read-only, always-visible list of nodes currently linked to
+        ours -- lives at the bottom of the main dashboard so you don't
+        have to switch screens just to see what's connected."""
+        stdscr = self.stdscr
+        if bottom <= top:
+            return
+        count = len(self.connected_nodes)
+        # Multiple simultaneous links is the less-common, more-notable
+        # state (a multi-way net rather than a single link) -- flag it
+        # with a warmer color instead of the same green as "just one".
+        count_attr = (curses.color_pair(CP_YELLOW) | curses.A_BOLD if count > 1
+                      else curses.color_pair(CP_CYAN) | curses.A_BOLD)
+        header = f"── CONNECTED NODES ({count})"
+        if self.connected_refreshing:
+            header += "  refreshing..."
+        header += " " + "─" * max(0, width - len(header) - 4)
+        safe_addstr(stdscr, top, 2, header, count_attr)
+
+        row = top + 1
+        if not self.connected_nodes:
+            safe_addstr(stdscr, row, 2, "  (none)",
+                        curses.color_pair(CP_DIM) | curses.A_DIM)
+            return
+        line_width = max(20, width - 14)
+        shown = self.connected_nodes[:max(0, bottom - row)]
+        for i, n in enumerate(shown):
+            marker = f"  {i + 1}." if count > 1 else "  ▸"
+            text = self._format_node_summary(n["number"], n, line_width)
+            safe_addstr(stdscr, row + i, 2, f"{marker} {text}",
+                        curses.color_pair(CP_TEXT))
+        hidden = count - len(shown)
+        if hidden > 0 and row + len(shown) <= bottom:
+            safe_addstr(stdscr, row + len(shown), 2, f"  ... +{hidden} more",
+                        curses.color_pair(CP_DIM) | curses.A_DIM)
 
 
 def main():
