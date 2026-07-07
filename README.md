@@ -105,10 +105,12 @@ screen instead of connecting blind:
   `d` to disconnect one, `n` for the nodes/favorites screen, `c` to
   reopen the config screen, `q` to quit. The bottom of this screen
   always shows a live **CONNECTED NODES** panel — whatever's currently
-  linked to yours, with callsign/location, refreshed in the background
-  — so you can see it at a glance without switching screens. If more
-  than one node is linked (a multi-way net rather than a single link),
-  the count is highlighted and each entry is numbered for clarity.
+  linked to yours, with callsign/location and how many nodes *that*
+  node is itself linked to, refreshed in the background — so you can
+  see it at a glance without switching screens. Up/Down selects an
+  entry, `x` disconnects the selected one directly. If more than one
+  node is linked (a multi-way net rather than a single link), the
+  count is highlighted and each entry is numbered for clarity.
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
