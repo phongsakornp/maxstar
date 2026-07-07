@@ -21,6 +21,7 @@ breaks everything.
 import argparse
 import audioop
 import hashlib
+import os
 import queue
 import socket
 import struct
@@ -527,7 +528,9 @@ def main():
     ap.add_argument("--host", default="192.168.1.156")
     ap.add_argument("--port", type=int, default=4569)
     ap.add_argument("--user", default="macbook")
-    ap.add_argument("--secret", default="TmMBI8lee73Do3XVZdU1")
+    ap.add_argument("--secret", default=os.environ.get("MAXSTAR_SECRET"),
+                     help="IAX2 peer secret. Falls back to the "
+                          "MAXSTAR_SECRET env var; never hardcode this.")
     ap.add_argument("--node", default="42865")
     ap.add_argument("--context", default="iax-client")
     ap.add_argument("--selftest", action="store_true",
@@ -542,6 +545,9 @@ def main():
                      help="Print raw [TX]/[RX] IAX2 frame trace (noisy; "
                           "useful for protocol-level debugging only).")
     args = ap.parse_args()
+    if not args.secret:
+        print("[!] No secret provided. Pass --secret or set MAXSTAR_SECRET.")
+        sys.exit(1)
 
     call = IaxCall(args.host, args.port, args.user, args.secret, args.node,
                    args.context)

@@ -10,9 +10,6 @@ Named after `maxwell` (the Pi hosting the node) + AllStar. A UI is
 planned, and a radio module may be attached to the Pi later; this client
 is meant to keep working as the control surface either way.
 
-See `../docs/allstarlink-listen-without-radio.md` for the full story
-(dead ends tried, node-side config, why keying works the way it does).
-
 ## Setup
 
 ```bash
@@ -21,15 +18,55 @@ python3 -m venv .venv
 brew install portaudio   # if not already installed
 ```
 
+## Node-side configuration
+
+ASL3 ships a ready-made template for this in `/etc/asterisk/iax.conf`:
+
+```
+[iaxclient](!)                   ; Connect from iax client (Zoiper, DVSwitch Mobile, etc.)
+type = friend
+context = iax-client
+auth = md5
+host = dynamic
+disallow = all
+allow = ulaw
+allow = adpcm
+allow = gsm
+transfer = no
+#tryinclude custom/iax/iaxclient-users.conf
+```
+
+The account lives in `/etc/asterisk/custom/iax/iaxclient-users.conf`:
+```
+[macbook](iaxclient)
+secret = <set on the Pi — never commit this>
+requirecalltoken = no
+callerid = "LISTENER"
+```
+(`requirecalltoken = no` because most IAX clients — this one included —
+don't implement the call-token challenge that `type=friend` peers
+normally require.)
+
+The dial context in `/etc/asterisk/extensions.conf`:
+```
+[iax-client]
+exten => 42865,1,rpt(42865,X)
+```
+Dialing your own node number (`42865`) connects you as the node's radio
+input — see "Single-seat connections" below.
+
 ## Usage
 
 ```bash
+export MAXSTAR_SECRET='<the secret from iaxclient-users.conf>'
 .venv/bin/python3 iax_client.py
 ```
 
 Defaults connect to `192.168.1.156:4569` as user `macbook` → node `42865`.
-Override with `--host`, `--port`, `--user`, `--secret`, `--node`,
-`--context` as needed.
+Override with `--host`, `--port`, `--user`, `--node`, `--context` as
+needed; `--secret` overrides the `MAXSTAR_SECRET` env var if you'd rather
+pass it inline. Never hardcode the secret as a default in source — it
+gets picked up by git otherwise.
 
 Interactive commands once connected:
 - `k` — key up, start sending mic audio
@@ -71,14 +108,24 @@ until a 2-second (`NEWKEYTIME`) fallback timer expires. Source:
 `AllStarLink/app_rpt`, `apps/app_rpt/rpt_channel.h` and `rpt_channel.c`
 (`send_newkey`, `NEWKEY1STR`, `NEWKEYTIME`).
 
+### Single-seat connections
+
 This connection type is also **single-seat** — dialing your own node
 number as the exact extension takes over the node's `rxchannel` (radio
 substitute). A second simultaneous connection gets the first one hung up.
-Confirmed by connecting two test accounts (`macbook`/`macbook2`)
-simultaneously and watching the server hang up the first the instant the
-second authenticated. Hearing another real participant requires a genuine
-node-to-node link (a different mechanism), not a second client
-connection to the same extension.
+Confirmed by connecting two test accounts simultaneously and watching the
+server hang up the first the instant the second authenticated. Hearing
+another real participant requires a genuine node-to-node link (a
+different mechanism), not a second client connection to the same
+extension. This is also why AllStarLink's built-in Parrot Mode (echo
+test) never plays anything back here — parrot's playback goes to other
+links, not back to the one occupying the radio seat.
+
+## Confirmed working
+
+Node `42865` was linked to `68777`, a real busy node, and its live
+traffic was heard through this client — connecting to and hearing
+another node, entirely without radio hardware.
 
 ## Known rough edges
 
