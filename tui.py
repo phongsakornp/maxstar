@@ -28,7 +28,8 @@ import threading
 import time
 
 from iax_client import IaxCall, load_dotenv, send_dtmf_function
-from allstarlink_stats import fetch_node_summary, fetch_connected_nodes
+from allstarlink_stats import (fetch_node_summary, fetch_connected_nodes,
+                                fetch_link_count)
 
 ENV_PATH = ".env"
 FAVORITES_PATH = "favorites.json"
@@ -235,9 +236,12 @@ class App:
         self.favorites = load_favorites()
         self.node_info_cache = {}    # node number -> summary dict / "loading"
         self.fetching_nodes = set()  # node numbers with a fetch in flight
+        self.link_count_cache = {}   # node number -> int link count / None
+        self.fetching_link_counts = set()
         self.connected_nodes = []
         self.connected_refreshing = False
         self.last_connected_refresh = 0.0
+        self.monitor_selected = 0  # selection within the connected-nodes panel
         self.nodes_selected = 0
         self.nodes_add_mode = False
         self.nodes_add_buf = ""
@@ -295,6 +299,22 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def fetch_link_count_for(self, node):
+        """Populate link_count_cache[node] in the background -- how many
+        nodes `node` itself is currently linked to. Safe to call
+        repeatedly, same guard pattern as fetch_node_info()."""
+        if node in self.link_count_cache or node in self.fetching_link_counts:
+            return
+        self.fetching_link_counts.add(node)
+
+        def worker():
+            try:
+                self.link_count_cache[node] = fetch_link_count(node)
+            finally:
+                self.fetching_link_counts.discard(node)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def refresh_connected_nodes(self, force=False):
         due = time.time() - self.last_connected_refresh > \
             CONNECTED_REFRESH_SECONDS
@@ -305,8 +325,11 @@ class App:
 
         def worker():
             try:
-                self.connected_nodes = fetch_connected_nodes(node)
+                nodes = fetch_connected_nodes(node)
+                self.connected_nodes = nodes
                 self.last_connected_refresh = time.time()
+                for n in nodes:
+                    self.fetch_link_count_for(n["number"])
             finally:
                 self.connected_refreshing = False
 
@@ -382,6 +405,19 @@ class App:
             if self.call and not self.link_busy:
                 self.link_mode = "disconnect"
                 self.link_buf = ""
+        elif ch == curses.KEY_UP:
+            if self.connected_nodes:
+                self.monitor_selected = (self.monitor_selected - 1) % \
+                    len(self.connected_nodes)
+        elif ch == curses.KEY_DOWN:
+            if self.connected_nodes:
+                self.monitor_selected = (self.monitor_selected + 1) % \
+                    len(self.connected_nodes)
+        elif ch in (ord("x"), ord("X")):
+            if self.connected_nodes and self.call and not self.link_busy:
+                node = self.connected_nodes[
+                    self.monitor_selected % len(self.connected_nodes)]
+                self.start_link("disconnect", node["number"])
         elif ch in (ord("n"), ord("N")):
             self.view = "nodes"
             self.nodes_selected = 0
@@ -570,21 +606,27 @@ class App:
             safe_addstr(stdscr, row, 2 + 14, display, value_attr)
 
     @staticmethod
-    def _format_node_summary(node, info, max_width=200):
+    def _format_node_summary(node, info, max_width=200, link_count=None):
         if info is None:
-            return f"{node:<8} (unknown -- lookup failed)"
-        bits = [info["callsign"], info["location"], info["sitename"],
-                info["affiliation"]]
-        detail = "  ".join(b for b in bits if b)
-        return f"{node:<8} {detail}"[:max_width]
+            base = f"{node:<8} (unknown -- lookup failed)"
+        else:
+            bits = [info["callsign"], info["location"], info["sitename"],
+                    info["affiliation"]]
+            detail = "  ".join(b for b in bits if b)
+            base = f"{node:<8} {detail}"
+        base = base[:max_width]
+        if link_count is not None:
+            base += f"  ({link_count} link{'s' if link_count != 1 else ''})"
+        return base
 
     def _node_line(self, node, max_width=200):
         """For favorites: look up cached info fetched separately, since
         we only have the bare node number until fetch_node_info() runs."""
         if node in self.fetching_nodes and node not in self.node_info_cache:
             return f"{node:<8} loading..."
-        return self._format_node_summary(
-            node, self.node_info_cache.get(node), max_width)
+        info = self.node_info_cache.get(node)
+        link_count = info.get("link_count") if info else None
+        return self._format_node_summary(node, info, max_width, link_count)
 
     def draw_nodes(self):
         stdscr = self.stdscr
@@ -608,7 +650,9 @@ class App:
             lines.append(("  (none)", curses.color_pair(CP_DIM) |
                           curses.A_DIM, None))
         for n in self.connected_nodes:
-            text = self._format_node_summary(n["number"], n, line_width)
+            link_count = self.link_count_cache.get(n["number"])
+            text = self._format_node_summary(n["number"], n, line_width,
+                                              link_count)
             lines.append((text, None, idx))
             idx += 1
         lines.append(("", 0, None))
@@ -701,18 +745,21 @@ class App:
         self.draw_connected_panel(18, height - 3, width)
 
         safe_addstr(stdscr, height - 2, 2,
-                    "k key  u unkey  l link  d disc  n nodes  "
-                    "c cfg  q quit",
+                    "k key  u unkey  l link  d disc  ↑/↓+x disconnect "
+                    "selected  n nodes  c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
     def draw_connected_panel(self, top, bottom, width):
-        """Read-only, always-visible list of nodes currently linked to
-        ours -- lives at the bottom of the main dashboard so you don't
-        have to switch screens just to see what's connected."""
+        """Always-visible list of nodes currently linked to ours, at the
+        bottom of the main dashboard. Up/Down selects, 'x' disconnects
+        the selected one -- so you don't have to switch screens or type
+        a node number just to drop a link you can already see."""
         stdscr = self.stdscr
         if bottom <= top:
             return
         count = len(self.connected_nodes)
+        if count:
+            self.monitor_selected %= count
         # Multiple simultaneous links is the less-common, more-notable
         # state (a multi-way net rather than a single link) -- flag it
         # with a warmer color instead of the same green as "just one".
@@ -732,10 +779,17 @@ class App:
         line_width = max(20, width - 14)
         shown = self.connected_nodes[:max(0, bottom - row)]
         for i, n in enumerate(shown):
-            marker = f"  {i + 1}." if count > 1 else "  ▸"
-            text = self._format_node_summary(n["number"], n, line_width)
-            safe_addstr(stdscr, row + i, 2, f"{marker} {text}",
-                        curses.color_pair(CP_TEXT))
+            selected = i == self.monitor_selected
+            if count > 1:
+                marker = f"{'▸' if selected else ' '} {i + 1}."
+            else:
+                marker = "  ▸"
+            link_count = self.link_count_cache.get(n["number"])
+            text = self._format_node_summary(n["number"], n, line_width,
+                                              link_count)
+            row_attr = (curses.color_pair(CP_CYAN) | curses.A_BOLD if selected
+                        else curses.color_pair(CP_TEXT))
+            safe_addstr(stdscr, row + i, 2, f"{marker} {text}", row_attr)
         hidden = count - len(shown)
         if hidden > 0 and row + len(shown) <= bottom:
             safe_addstr(stdscr, row + len(shown), 2, f"  ... +{hidden} more",

@@ -42,11 +42,30 @@ def summarize_node(node_obj):
 
 
 def fetch_node_summary(node, timeout=5):
-    """A single node's own registry info (callsign/location/etc)."""
+    """A single node's own registry info (callsign/location/etc), plus
+    how many nodes it's currently linked to (link_count) -- same API
+    call already returns both, no extra request needed."""
     raw = fetch_node_stats(node, timeout)
     if not raw:
         return None
-    return summarize_node(raw.get("node"))
+    summary = summarize_node(raw.get("node"))
+    if summary is None:
+        return None
+    data = ((raw.get("stats") or {}).get("data") or {})
+    summary["link_count"] = len(data.get("links") or [])
+    return summary
+
+
+def fetch_link_count(node, timeout=5):
+    """How many nodes `node` is currently linked to -- a lightweight
+    lookup for nodes we only have registry info for (e.g. entries in
+    our own linkedNodes list), where we haven't already fetched their
+    own stats separately."""
+    raw = fetch_node_stats(node, timeout)
+    if not raw:
+        return None
+    data = ((raw.get("stats") or {}).get("data") or {})
+    return len(data.get("links") or [])
 
 
 def fetch_connected_nodes(node, timeout=5):
