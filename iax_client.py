@@ -540,14 +540,19 @@ def run_selftest(call: IaxCall):
 def main():
     load_dotenv()
     ap = argparse.ArgumentParser(description="Minimal IAX2 test client")
-    ap.add_argument("--host", default="192.168.1.156")
-    ap.add_argument("--port", type=int, default=4569)
-    ap.add_argument("--user", default="macbook")
+    ap.add_argument("--host", default=os.environ.get("MAXSTAR_HOST"),
+                     help="Node's IP/hostname. Falls back to MAXSTAR_HOST.")
+    ap.add_argument("--port", type=int,
+                     default=int(os.environ.get("MAXSTAR_PORT", 4569)))
+    ap.add_argument("--user", default=os.environ.get("MAXSTAR_USER"),
+                     help="IAX2 peer username. Falls back to MAXSTAR_USER.")
     ap.add_argument("--secret", default=os.environ.get("MAXSTAR_SECRET"),
                      help="IAX2 peer secret. Falls back to the "
                           "MAXSTAR_SECRET env var; never hardcode this.")
-    ap.add_argument("--node", default="42865")
-    ap.add_argument("--context", default="iax-client")
+    ap.add_argument("--node", default=os.environ.get("MAXSTAR_NODE"),
+                     help="Node number to dial. Falls back to MAXSTAR_NODE.")
+    ap.add_argument("--context",
+                     default=os.environ.get("MAXSTAR_CONTEXT", "iax-client"))
     ap.add_argument("--selftest", action="store_true",
                      help="Inject a synthetic tone and report what echoes "
                           "back, without needing mic/speakers.")
@@ -560,8 +565,15 @@ def main():
                      help="Print raw [TX]/[RX] IAX2 frame trace (noisy; "
                           "useful for protocol-level debugging only).")
     args = ap.parse_args()
-    if not args.secret:
-        print("[!] No secret provided. Pass --secret or set MAXSTAR_SECRET.")
+    required = (
+        ("--host", "MAXSTAR_HOST", args.host),
+        ("--user", "MAXSTAR_USER", args.user),
+        ("--secret", "MAXSTAR_SECRET", args.secret),
+        ("--node", "MAXSTAR_NODE", args.node),
+    )
+    missing = [f"{flag}/{env}" for flag, env, val in required if not val]
+    if missing:
+        print(f"[!] Missing required value(s): {', '.join(missing)}")
         sys.exit(1)
 
     call = IaxCall(args.host, args.port, args.user, args.secret, args.node,

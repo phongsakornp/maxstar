@@ -59,17 +59,18 @@ radio input — see "Single-seat connections" below.
 
 ```bash
 cp .env.example .env
-# edit .env, set MAXSTAR_SECRET to the value from iaxclient-users.conf
+# edit .env: set MAXSTAR_HOST, MAXSTAR_USER, MAXSTAR_SECRET, MAXSTAR_NODE
 .venv/bin/python3 iax_client.py
 ```
 
-`.env` is gitignored — it's read automatically on startup (falls back
-to a real `MAXSTAR_SECRET` env var if no `.env` is present, and either
-is overridden by an inline `--secret` if you'd rather pass it that way).
-Defaults connect to `<YOUR_NODE_IP>:4569` as user `<YOUR_USERNAME>` →
-node `<YOUR_NODE>`. Override with `--host`, `--port`, `--user`,
-`--node`, `--context` as needed. Never hardcode the secret as a default
-in source — it gets picked up by git otherwise.
+`.env` is gitignored and read automatically on startup (falls back to
+real env vars of the same name if no `.env` is present). `--host`,
+`--port`, `--user`, `--secret`, `--node`, `--context` all override
+their `MAXSTAR_*` env var if you'd rather pass them inline. `--host`,
+`--user`, `--secret`, and `--node` are required one way or
+another — the client refuses to guess at your node's identity. Never
+hardcode any of these as defaults in source — they get picked up by
+git otherwise.
 
 Interactive commands once connected:
 - `k` — key up, start sending mic audio
