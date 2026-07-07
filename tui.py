@@ -52,6 +52,7 @@ METER_MAX_WIDTH = 100  # cap so an ultra-wide terminal doesn't look silly
 METER_DECAY = 0.80    # per-tick decay of the main (fast) meter fill
 PEAK_DECAY = 0.985     # per-tick decay of the slow peak-hold marker
 FULL_SCALE = 32767
+RX_ACTIVE_THRESHOLD = 200  # above the digital noise floor, below real speech
 
 # Zone boundaries as a fraction of the meter width (green/yellow/red),
 # same idea as a rig's S-meter having a "hot" red zone near the top.
@@ -69,6 +70,8 @@ CP_GREEN = 4
 CP_YELLOW = 5
 CP_RED = 6
 CP_FRAME = 7
+CP_RX_ON = 8   # filled badge (background fill), not just colored text
+CP_TX_ON = 9
 
 # 5-row-tall block digits for the VFO-style node number readout.
 BIG_DIGITS = {
@@ -100,6 +103,8 @@ def init_colors():
     curses.init_pair(CP_YELLOW, curses.COLOR_YELLOW, bg)
     curses.init_pair(CP_RED, curses.COLOR_RED, bg)
     curses.init_pair(CP_FRAME, curses.COLOR_CYAN, bg)
+    curses.init_pair(CP_RX_ON, curses.COLOR_BLACK, curses.COLOR_GREEN)
+    curses.init_pair(CP_TX_ON, curses.COLOR_BLACK, curses.COLOR_RED)
 
 
 def read_config():
@@ -163,6 +168,18 @@ def draw_box(stdscr, y0, x0, height, width, title=""):
     if title:
         safe_addstr(stdscr, y0, x0 + 2, f" {title} ",
                     curses.color_pair(CP_CYAN) | curses.A_BOLD)
+
+
+def draw_badge(stdscr, y, x, label, active, on_pair):
+    """A big, hard-to-miss status badge: a solid filled block when
+    active, a small dim outline when not -- much more apparent than
+    plain colored text, which is easy to miss at a glance."""
+    if active:
+        safe_addstr(stdscr, y, x, f" {label} ",
+                    curses.color_pair(on_pair) | curses.A_BOLD)
+    else:
+        safe_addstr(stdscr, y, x, f"[{label.lower()}]",
+                    curses.color_pair(CP_DIM) | curses.A_DIM)
 
 
 def draw_big_number(stdscr, y, x, text):
@@ -755,15 +772,17 @@ class App:
         draw_big_number(stdscr, 4, 2, cfg["MAXSTAR_NODE"])
 
         keyed = bool(self.call and self.call.keyed.is_set())
-        lamp_attr = (curses.color_pair(CP_RED) | curses.A_BOLD if keyed
-                     else curses.color_pair(CP_DIM) | curses.A_DIM)
-        safe_addstr(stdscr, 4, 28, "● TX" if keyed else "○ rx",
-                    lamp_attr)
-
         rx_instant = self.call.rx_level if self.call else 0
         tx_instant = self.call.tx_level if self.call else 0
         self.rx_display = max(rx_instant, self.rx_display * METER_DECAY)
         self.tx_display = max(tx_instant, self.tx_display * METER_DECAY)
+
+        # Two real, filled badges instead of one small toggling label --
+        # RX lights up on actual received audio (not just "not
+        # transmitting"), TX on the real keyed state.
+        rx_active = self.rx_display > RX_ACTIVE_THRESHOLD
+        draw_badge(stdscr, 4, 28, "RX", rx_active, CP_RX_ON)
+        draw_badge(stdscr, 4, 34, "TX", keyed, CP_TX_ON)
         self.rx_peak = max(rx_instant, self.rx_peak * PEAK_DECAY)
         self.tx_peak = max(tx_instant, self.tx_peak * PEAK_DECAY)
 
