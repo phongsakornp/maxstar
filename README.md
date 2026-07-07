@@ -85,12 +85,15 @@ Interactive commands once connected:
 
 Curses-based UI (stdlib `curses`, no new dependency), styled like a
 rig's control panel (Icom IC-705-ish): bordered panel, a big block-digit
-VFO-style readout for the node number, a PTT lamp (`○ rx` / `● TX`),
-and segmented green/yellow/red level meters with a peak-hold marker and
-a dB scale row. The scale reads dBFS (audio level relative to full
-scale), not S-units — IAX2 carries digitized audio, not an RF signal
-report, so there's no real RSSI to show; it borrows the meter's visual
-language while staying honest about what's actually being measured.
+VFO-style readout for the node number, two filled RX/TX status badges
+(solid green/red block when active, small dim outline when not — RX
+lights up on real received-audio activity, TX on the actual keyed
+state), and segmented green/yellow/red level meters with a peak-hold
+marker and a dB scale row. The scale reads dBFS (audio level relative
+to full scale), not S-units — IAX2 carries digitized audio, not an RF
+signal report, so there's no real RSSI to show; it borrows the meter's
+visual language while staying honest about what's actually being
+measured.
 
 The panel fills the whole terminal (sized from `stdscr.getmaxyx()`, not
 a fixed box) and handles window resize, so it scales up nicely on a
