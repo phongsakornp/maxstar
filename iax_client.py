@@ -90,6 +90,7 @@ SC_LOG_FLAG = 0x80
 
 SAMPLE_RATE = 8000
 FRAME_SAMPLES = 160  # 20ms @ 8kHz -- standard G.711 packetization
+RX_LEVEL_STALE_SECONDS = 0.4  # well above normal 20ms jitter, still snappy
 
 
 def compress_subclass(value: int) -> int:
@@ -240,12 +241,26 @@ class IaxCall:
         # Instantaneous (per-frame) peak levels for live VU-style metering,
         # as opposed to rx_audio_peak above which is a cumulative high-water
         # mark used by --selftest/--listen reporting.
-        self.rx_level = 0
+        self._rx_level_raw = 0
+        self._rx_last_frame_time = 0.0
         self.tx_level = 0
 
     def _trace(self, msg):
         if self.verbose:
             print(msg)
+
+    @property
+    def rx_level(self):
+        """Current RX peak, or 0 if no voice frame has arrived recently.
+
+        Some links only send frames while the far end is actually
+        talking (no continuous comfort-noise stream) -- without this,
+        the last frame's peak would sit forever with nothing to bring
+        it back down once they stop transmitting, so the meter never
+        decayed."""
+        if time.time() - self._rx_last_frame_time > RX_LEVEL_STALE_SECONDS:
+            return 0
+        return self._rx_level_raw
 
     # ---- low level ------------------------------------------------
 
@@ -410,7 +425,8 @@ class IaxCall:
         pcm16 = audioop.ulaw2lin(ulaw_bytes, 2)
         peak = max(abs(s) for s in struct.unpack(f"!{len(pcm16)//2}h", pcm16)) if pcm16 else 0
         self.rx_audio_peak = max(self.rx_audio_peak, peak)
-        self.rx_level = peak
+        self._rx_level_raw = peak
+        self._rx_last_frame_time = time.time()
         if self.selftest:
             print(f"    [RX-AUDIO] frame#{self.rx_audio_frames} "
                   f"bytes={len(ulaw_bytes)} peak={peak}")
