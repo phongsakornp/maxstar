@@ -110,13 +110,7 @@ screen instead of connecting blind:
   see it at a glance without switching screens. Up/Down selects an
   entry, `x` disconnects the selected one directly. If more than one
   node is linked (a multi-way net rather than a single link), the
-  count is highlighted and each entry is numbered for clarity. When
-  there's exactly one connected node, its row lights up (🔊, bold
-  green) whenever RX audio is active — AllMon3-style "who's talking."
-  With more than one node linked, IAX2 gives us no way to attribute
-  audio to a specific one (that needs AMI's per-link keyed state,
-  which this doesn't use), so the panel header shows a general
-  "RECEIVING" note instead of guessing which row.
+  count is highlighted and each entry is numbered for clarity.
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
