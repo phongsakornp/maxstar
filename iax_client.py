@@ -32,6 +32,20 @@ import time
 import numpy as np
 import sounddevice as sd
 
+
+def load_dotenv(path=".env"):
+    """Load KEY=VALUE lines from .env into os.environ (existing env wins)."""
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
 # --------------------------------------------------------------- protocol
 
 FRAME_DTMF_END = 1
@@ -524,6 +538,7 @@ def run_selftest(call: IaxCall):
 
 
 def main():
+    load_dotenv()
     ap = argparse.ArgumentParser(description="Minimal IAX2 test client")
     ap.add_argument("--host", default="192.168.1.156")
     ap.add_argument("--port", type=int, default=4569)

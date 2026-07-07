@@ -58,15 +58,18 @@ input — see "Single-seat connections" below.
 ## Usage
 
 ```bash
-export MAXSTAR_SECRET='<the secret from iaxclient-users.conf>'
+cp .env.example .env
+# edit .env, set MAXSTAR_SECRET to the value from iaxclient-users.conf
 .venv/bin/python3 iax_client.py
 ```
 
-Defaults connect to `192.168.1.156:4569` as user `macbook` → node `42865`.
-Override with `--host`, `--port`, `--user`, `--node`, `--context` as
-needed; `--secret` overrides the `MAXSTAR_SECRET` env var if you'd rather
-pass it inline. Never hardcode the secret as a default in source — it
-gets picked up by git otherwise.
+`.env` is gitignored — it's read automatically on startup (falls back
+to a real `MAXSTAR_SECRET` env var if no `.env` is present, and either
+is overridden by an inline `--secret` if you'd rather pass it that way).
+Defaults connect to `192.168.1.156:4569` as user `macbook` → node
+`42865`. Override with `--host`, `--port`, `--user`, `--node`,
+`--context` as needed. Never hardcode the secret as a default in
+source — it gets picked up by git otherwise.
 
 Interactive commands once connected:
 - `k` — key up, start sending mic audio
