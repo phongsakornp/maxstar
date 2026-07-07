@@ -97,12 +97,32 @@ screen instead of connecting blind:
 - **Config screen**: Up/Down to select a field, Enter to edit,
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
-- **Monitor screen**: `k`/`u` to key/unkey, `c` to reopen the config
-  screen, `q` to quit.
+- **Monitor screen**: `k`/`u` to key/unkey, `l` to connect to a node,
+  `d` to disconnect one, `n` for the nodes screen, `c` to reopen the
+  config screen, `q` to quit.
+- **Nodes screen** (`n`): shows nodes currently connected to yours
+  (live from stats.allstarlink.org) and a favorites list. `a` adds a
+  favorite by node number, `r` removes the selected one, Enter connects
+  to the selected node, `x` disconnects it. Favorites persist in
+  `favorites.json` (gitignored, like `.env` — personal, not project
+  data). Connect/disconnect both dial the node's real app_rpt function
+  code (`*3<node>`/`*1<node>`) as DTMF tone audio — the same mechanism
+  a radio operator dialing it on their keypad uses, confirmed against
+  this node's own `rpt.conf` functions table rather than assumed.
 
 `iax_client.py`'s own `print()` diagnostics are silenced while the TUI
 is running (they'd otherwise corrupt curses' control of the screen) —
 use the plain CLI with `--verbose` if you need the raw frame trace.
+
+## Linking to another node (CLI)
+
+```bash
+.venv/bin/python3 iax_client.py --link '*3592525'   # connect transceive
+.venv/bin/python3 iax_client.py --link '*1592525'   # disconnect
+```
+
+Same DTMF function-code mechanism as the TUI's `l`/`d`/nodes screen,
+as a one-shot command.
 
 ## Diagnostic flags (no mic/speakers needed)
 

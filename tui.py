@@ -5,9 +5,11 @@ display (Icom IC-705-ish): dark panel, big VFO-style node readout,
 segmented green/yellow/red level meters with dB scale ticks and a
 peak-hold marker, PTT lamp.
 
-Two views:
+Three views:
 - monitor: live RX/TX audio-level meters and key state
 - config: edit every MAXSTAR_* value and save back to .env
+- nodes: currently-connected nodes (from stats.allstarlink.org) and a
+  favorites list you can connect/disconnect from directly
 
 No new dependency -- curses is stdlib.
 
@@ -18,14 +20,19 @@ just drawn in the same segmented/zoned style a rig's meter uses.
 """
 
 import curses
+import json
 import math
 import os
 import sys
 import threading
+import time
 
 from iax_client import IaxCall, load_dotenv, send_dtmf_function
+from allstarlink_stats import fetch_node_summary, fetch_connected_nodes
 
 ENV_PATH = ".env"
+FAVORITES_PATH = "favorites.json"
+CONNECTED_REFRESH_SECONDS = 15
 
 # (env key, display label, mask value on screen)
 FIELDS = [
@@ -108,6 +115,22 @@ def write_config(config):
         f.write("\n".join(lines) + "\n")
     for key, value in config.items():
         os.environ[key] = value
+
+
+def load_favorites():
+    if not os.path.exists(FAVORITES_PATH):
+        return []
+    try:
+        with open(FAVORITES_PATH) as f:
+            data = json.load(f)
+        return [str(n) for n in data] if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def save_favorites(favorites):
+    with open(FAVORITES_PATH, "w") as f:
+        json.dump(favorites, f, indent=2)
 
 
 def level_fraction(level):
@@ -208,6 +231,16 @@ class App:
         self.link_status = ""
         self.link_busy = False
 
+        self.favorites = load_favorites()
+        self.node_info_cache = {}    # node number -> summary dict / "loading"
+        self.fetching_nodes = set()  # node numbers with a fetch in flight
+        self.connected_nodes = []
+        self.connected_refreshing = False
+        self.last_connected_refresh = 0.0
+        self.nodes_selected = 0
+        self.nodes_add_mode = False
+        self.nodes_add_buf = ""
+
         required = ("MAXSTAR_HOST", "MAXSTAR_USER", "MAXSTAR_SECRET",
                     "MAXSTAR_NODE")
         self.view = "monitor" if all(self.config[k] for k in required) \
@@ -244,8 +277,44 @@ class App:
         self._shutdown_call(self.call)
         self.connect()
 
+    # ---- stats.allstarlink.org lookups -------------------------------
+
+    def fetch_node_info(self, node):
+        """Populate node_info_cache[node] in the background. Safe to call
+        repeatedly -- skips if already cached or a fetch is in flight."""
+        if node in self.node_info_cache or node in self.fetching_nodes:
+            return
+        self.fetching_nodes.add(node)
+
+        def worker():
+            try:
+                self.node_info_cache[node] = fetch_node_summary(node)
+            finally:
+                self.fetching_nodes.discard(node)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def refresh_connected_nodes(self, force=False):
+        due = time.time() - self.last_connected_refresh > \
+            CONNECTED_REFRESH_SECONDS
+        if self.connected_refreshing or not (force or due):
+            return
+        self.connected_refreshing = True
+        node = self.config["MAXSTAR_NODE"]
+
+        def worker():
+            try:
+                self.connected_nodes = fetch_connected_nodes(node)
+                self.last_connected_refresh = time.time()
+            finally:
+                self.connected_refreshing = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def run(self):
-        curses.set_escdelay(25)  # default ~1000ms makes Esc feel unresponsive
+        curses.set_escdelay(50)  # default ~1000ms makes Esc feel unresponsive;
+        # 50ms (vim's usual default) still leaves headroom to distinguish
+        # a bare Esc from the start of an arrow-key escape sequence
         init_colors()
         curses.curs_set(0)
         self.stdscr.nodelay(True)
@@ -285,6 +354,8 @@ class App:
             return True
         if self.view == "config":
             return self.handle_config_key(ch)
+        if self.view == "nodes":
+            return self.handle_nodes_key(ch)
         return self.handle_monitor_key(ch)
 
     def handle_monitor_key(self, ch):
@@ -310,6 +381,12 @@ class App:
             if self.call and not self.link_busy:
                 self.link_mode = "disconnect"
                 self.link_buf = ""
+        elif ch in (ord("n"), ord("N")):
+            self.view = "nodes"
+            self.nodes_selected = 0
+            self.refresh_connected_nodes(force=True)
+            for node in self.favorites:
+                self.fetch_node_info(node)
         return True
 
     def handle_link_key(self, ch):
@@ -379,6 +456,67 @@ class App:
             return False
         return True
 
+    def _node_rows(self):
+        """Flat, rebuilt-each-time list of (kind, node_number) for the
+        nodes screen: currently-connected nodes, then favorites, then a
+        sentinel "add favorite" row."""
+        rows = [("connected", n["number"]) for n in self.connected_nodes]
+        rows += [("favorite", n) for n in self.favorites]
+        rows.append(("add", None))
+        return rows
+
+    def handle_nodes_key(self, ch):
+        if self.nodes_add_mode:
+            if ch == 27:
+                self.nodes_add_mode = False
+                self.nodes_add_buf = ""
+            elif ch in (curses.KEY_ENTER, 10, 13):
+                node = self.nodes_add_buf
+                if node and node not in self.favorites:
+                    self.favorites.append(node)
+                    save_favorites(self.favorites)
+                    self.fetch_node_info(node)
+                self.nodes_add_mode = False
+                self.nodes_add_buf = ""
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                self.nodes_add_buf = self.nodes_add_buf[:-1]
+            elif ord("0") <= ch <= ord("9"):
+                self.nodes_add_buf += chr(ch)
+            return True
+
+        rows = self._node_rows()
+        if ch in (ord("q"), ord("Q")):
+            return False
+        elif ch in (27, ord("n"), ord("N")):
+            self.view = "monitor"
+        elif ch == curses.KEY_UP:
+            self.nodes_selected = (self.nodes_selected - 1) % len(rows)
+        elif ch == curses.KEY_DOWN:
+            self.nodes_selected = (self.nodes_selected + 1) % len(rows)
+        elif ch in (curses.KEY_ENTER, 10, 13):
+            kind, node = rows[self.nodes_selected]
+            if kind == "add":
+                self.nodes_add_mode = True
+                self.nodes_add_buf = ""
+            elif node and self.call and not self.link_busy:
+                self.start_link("connect", node)
+        elif ch in (ord("x"), ord("X")):
+            kind, node = rows[self.nodes_selected]
+            if kind in ("connected", "favorite") and node and self.call \
+                    and not self.link_busy:
+                self.start_link("disconnect", node)
+        elif ch in (ord("r"), ord("R")):
+            kind, node = rows[self.nodes_selected]
+            if kind == "favorite":
+                self.favorites.remove(node)
+                save_favorites(self.favorites)
+                self.nodes_selected = min(self.nodes_selected,
+                                          len(self._node_rows()) - 1)
+        elif ch in (ord("a"), ord("A")):
+            self.nodes_add_mode = True
+            self.nodes_add_buf = ""
+        return True
+
     # ---- drawing ------------------------------------------------------
 
     def draw(self):
@@ -386,6 +524,9 @@ class App:
         try:
             if self.view == "config":
                 self.draw_config()
+            elif self.view == "nodes":
+                self.refresh_connected_nodes()
+                self.draw_nodes()
             else:
                 self.draw_monitor()
         except curses.error:
@@ -418,6 +559,74 @@ class App:
                           if self.editing and self.selected == i
                           else curses.color_pair(CP_TEXT))
             safe_addstr(stdscr, row, 2 + 14, display, value_attr)
+
+    def _node_line(self, node):
+        info = self.node_info_cache.get(node)
+        if node in self.fetching_nodes and info is None:
+            return f"{node:<8} loading..."
+        if info is None:
+            return f"{node:<8} (unknown -- lookup failed)"
+        bits = [info["callsign"], info["location"], info["sitename"],
+                info["affiliation"]]
+        detail = "  ".join(b for b in bits if b)
+        return f"{node:<8} {detail}"[:PANEL_WIDTH - 6]
+
+    def draw_nodes(self):
+        stdscr = self.stdscr
+        rows = self._node_rows()
+        # (text, attr, selectable_index or None)
+        lines = []
+        hint_attr = curses.color_pair(CP_DIM) | curses.A_DIM
+        lines.append(("↑/↓ select  Enter connect  x disconnect", hint_attr,
+                       None))
+        lines.append(("a add  r remove  n/Esc back  q quit", hint_attr,
+                       None))
+        lines.append(("", 0, None))
+        lines.append((f"CONNECTED NOW ({len(self.connected_nodes)})"
+                       + ("  refreshing..." if self.connected_refreshing
+                          else ""),
+                       curses.color_pair(CP_CYAN) | curses.A_BOLD, None))
+        idx = 0
+        if not self.connected_nodes:
+            lines.append(("  (none)", curses.color_pair(CP_DIM) |
+                          curses.A_DIM, None))
+        for n in self.connected_nodes:
+            lines.append((self._node_line(n["number"]), None, idx))
+            idx += 1
+        lines.append(("", 0, None))
+        lines.append(("FAVORITES", curses.color_pair(CP_CYAN) |
+                      curses.A_BOLD, None))
+        if not self.favorites:
+            lines.append(("  (none yet -- press 'a' to add a node)",
+                          curses.color_pair(CP_DIM) | curses.A_DIM, None))
+        for n in self.favorites:
+            lines.append((self._node_line(n), None, idx))
+            idx += 1
+        if self.nodes_add_mode:
+            lines.append((f"  add favorite, node #: {self.nodes_add_buf}_",
+                          curses.color_pair(CP_YELLOW) | curses.A_BOLD,
+                          None))
+        else:
+            lines.append(("+ Add favorite", None, idx))
+        if self.link_busy or self.link_status:
+            msg = self.link_status if not self.link_busy else \
+                f"» {self.link_status}"
+            lines.append((msg, curses.color_pair(CP_YELLOW) |
+                          curses.A_BOLD, None))
+
+        height = len(lines) + 3
+        draw_box(stdscr, 0, 0, height, PANEL_WIDTH, title="NODES")
+        for i, (text, attr, sel_idx) in enumerate(lines):
+            row = 1 + i
+            if sel_idx is not None:
+                selected = sel_idx == self.nodes_selected
+                marker = "▸ " if selected else "  "
+                base = (curses.color_pair(CP_CYAN) | curses.A_BOLD
+                        if selected else curses.color_pair(CP_TEXT))
+                safe_addstr(stdscr, row, 2, f"{marker}{text}", base)
+            else:
+                safe_addstr(stdscr, row, 2, text, attr or
+                            curses.color_pair(CP_TEXT))
 
     def draw_monitor(self):
         stdscr = self.stdscr
@@ -472,8 +681,8 @@ class App:
                         curses.color_pair(CP_GREEN))
 
         safe_addstr(stdscr, height - 2, 2,
-                    "k key  u unkey  l link  d disconnect  "
-                    "c config  q quit",
+                    "k key  u unkey  l link  d disc  n nodes  "
+                    "c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
 
