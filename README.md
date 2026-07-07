@@ -92,21 +92,30 @@ scale), not S-units — IAX2 carries digitized audio, not an RF signal
 report, so there's no real RSSI to show; it borrows the meter's visual
 language while staying honest about what's actually being measured.
 
+The panel fills the whole terminal (sized from `stdscr.getmaxyx()`, not
+a fixed box) and handles window resize, so it scales up nicely on a
+full-size terminal window rather than sitting in a small corner.
+
 If any required `.env` value is missing it opens straight into a config
 screen instead of connecting blind:
 - **Config screen**: Up/Down to select a field, Enter to edit,
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
 - **Monitor screen**: `k`/`u` to key/unkey, `l` to connect to a node,
-  `d` to disconnect one, `n` for the nodes screen, `c` to reopen the
-  config screen, `q` to quit.
-- **Nodes screen** (`n`): shows nodes currently connected to yours
-  (live from stats.allstarlink.org) and a favorites list. `a` adds a
-  favorite by node number, `r` removes the selected one, Enter connects
-  to the selected node, `x` disconnects it. Favorites persist in
-  `favorites.json` (gitignored, like `.env` — personal, not project
-  data). Connect/disconnect both dial the node's real app_rpt function
-  code (`*3<node>`/`*1<node>`) via native IAX2 DTMF signaling (BEGIN/END
+  `d` to disconnect one, `n` for the nodes/favorites screen, `c` to
+  reopen the config screen, `q` to quit. The bottom of this screen
+  always shows a live **CONNECTED NODES** panel — whatever's currently
+  linked to yours, with callsign/location, refreshed in the background
+  — so you can see it at a glance without switching screens. If more
+  than one node is linked (a multi-way net rather than a single link),
+  the count is highlighted and each entry is numbered for clarity.
+- **Nodes screen** (`n`): the same connected-nodes list plus a
+  favorites list, both interactive here. `a` adds a favorite by node
+  number, `r` removes the selected one, Enter connects to the selected
+  node, `x` disconnects it. Favorites persist in `favorites.json`
+  (gitignored, like `.env` — personal, not project data). Connect/
+  disconnect both dial the node's real app_rpt function code
+  (`*3<node>`/`*1<node>`) via native IAX2 DTMF signaling (BEGIN/END
   frame pairs) — confirmed against this node's own `rpt.conf` functions
   table rather than assumed. Not audio-tone DTMF: that was tried first
   and confirmed not to work here, since this connection's function-code
