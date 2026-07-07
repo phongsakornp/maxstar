@@ -52,7 +52,6 @@ METER_MAX_WIDTH = 100  # cap so an ultra-wide terminal doesn't look silly
 METER_DECAY = 0.80    # per-tick decay of the main (fast) meter fill
 PEAK_DECAY = 0.985     # per-tick decay of the slow peak-hold marker
 FULL_SCALE = 32767
-RX_ACTIVE_THRESHOLD = 200  # above the digital noise floor, below real speech
 
 # Zone boundaries as a fraction of the meter width (green/yellow/red),
 # same idea as a rig's S-meter having a "hot" red zone near the top.
@@ -786,25 +785,18 @@ class App:
             safe_addstr(stdscr, 16, 2, f"» {self.link_status}",
                         curses.color_pair(CP_GREEN))
 
-        rx_active = self.rx_display > RX_ACTIVE_THRESHOLD
-        self.draw_connected_panel(18, height - 3, width, rx_active)
+        self.draw_connected_panel(18, height - 3, width)
 
         safe_addstr(stdscr, height - 2, 2,
                     "k key  u unkey  l link  d disc  ↑/↓+x disconnect "
                     "selected  n nodes  c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
-    def draw_connected_panel(self, top, bottom, width, rx_active=False):
+    def draw_connected_panel(self, top, bottom, width):
         """Always-visible list of nodes currently linked to ours, at the
         bottom of the main dashboard. Up/Down selects, 'x' disconnects
         the selected one -- so you don't have to switch screens or type
-        a node number just to drop a link you can already see.
-
-        rx_active highlights whoever's currently talking, AllMon3-style
-        -- but IAX2 audio carries no per-node attribution, so this only
-        works unambiguously with exactly one connected node. With more
-        than one, we show a general "receiving" note instead of
-        guessing which row to highlight."""
+        a node number just to drop a link you can already see."""
         stdscr = self.stdscr
         if bottom <= top:
             return
@@ -819,8 +811,6 @@ class App:
         header = f"── CONNECTED NODES ({count})"
         if self.connected_refreshing:
             header += "  refreshing..."
-        if rx_active and count > 1:
-            header += "  🔊 RECEIVING"
         header += " " + "─" * max(0, width - len(header) - 4)
         safe_addstr(stdscr, top, 2, header, count_attr)
 
@@ -833,22 +823,15 @@ class App:
         shown = self.connected_nodes[:max(0, bottom - row)]
         for i, n in enumerate(shown):
             selected = i == self.monitor_selected
-            talking = rx_active and count == 1
             if count > 1:
                 marker = f"{'▸' if selected else ' '} {i + 1}."
-            elif talking:
-                marker = "🔊 ▸"
             else:
                 marker = "  ▸"
             link_count = self.link_count_cache.get(n["number"])
             text = self._format_node_summary(n["number"], n, line_width,
                                               link_count)
-            if talking:
-                row_attr = curses.color_pair(CP_GREEN) | curses.A_BOLD
-            elif selected:
-                row_attr = curses.color_pair(CP_CYAN) | curses.A_BOLD
-            else:
-                row_attr = curses.color_pair(CP_TEXT)
+            row_attr = (curses.color_pair(CP_CYAN) | curses.A_BOLD if selected
+                        else curses.color_pair(CP_TEXT))
             safe_addstr(stdscr, row + i, 2, f"{marker} {text}", row_attr)
         hidden = count - len(shown)
         if hidden > 0 and row + len(shown) <= bottom:
