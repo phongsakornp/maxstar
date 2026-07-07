@@ -83,16 +83,22 @@ Interactive commands once connected:
 .venv/bin/python3 tui.py
 ```
 
-Curses-based UI (stdlib `curses`, no new dependency). If any required
-`.env` value is missing it opens straight into a config screen instead
-of connecting blind:
+Curses-based UI (stdlib `curses`, no new dependency), styled like a
+rig's control panel (Icom IC-705-ish): bordered panel, a big block-digit
+VFO-style readout for the node number, a PTT lamp (`○ rx` / `● TX`),
+and segmented green/yellow/red level meters with a peak-hold marker and
+a dB scale row. The scale reads dBFS (audio level relative to full
+scale), not S-units — IAX2 carries digitized audio, not an RF signal
+report, so there's no real RSSI to show; it borrows the meter's visual
+language while staying honest about what's actually being measured.
+
+If any required `.env` value is missing it opens straight into a config
+screen instead of connecting blind:
 - **Config screen**: Up/Down to select a field, Enter to edit,
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
-- **Monitor screen**: live RX/TX signal meters (peak-hold with decay,
-  so a meter falls smoothly rather than snapping to 0 between voice
-  frames) plus connection/key status. `k`/`u` to key/unkey, `c` to
-  reopen the config screen, `q` to quit.
+- **Monitor screen**: `k`/`u` to key/unkey, `c` to reopen the config
+  screen, `q` to quit.
 
 `iax_client.py`'s own `print()` diagnostics are silenced while the TUI
 is running (they'd otherwise corrupt curses' control of the screen) —
