@@ -236,6 +236,12 @@ class IaxCall:
         self.rx_audio_frames = 0
         self.rx_audio_peak = 0
 
+        # Instantaneous (per-frame) peak levels for live VU-style metering,
+        # as opposed to rx_audio_peak above which is a cumulative high-water
+        # mark used by --selftest/--listen reporting.
+        self.rx_level = 0
+        self.tx_level = 0
+
     def _trace(self, msg):
         if self.verbose:
             print(msg)
@@ -394,6 +400,7 @@ class IaxCall:
         pcm16 = audioop.ulaw2lin(ulaw_bytes, 2)
         peak = max(abs(s) for s in struct.unpack(f"!{len(pcm16)//2}h", pcm16)) if pcm16 else 0
         self.rx_audio_peak = max(self.rx_audio_peak, peak)
+        self.rx_level = peak
         if self.selftest:
             print(f"    [RX-AUDIO] frame#{self.rx_audio_frames} "
                   f"bytes={len(ulaw_bytes)} peak={peak}")
@@ -413,9 +420,11 @@ class IaxCall:
             outdata[:] = np.frombuffer(chunk, dtype=np.int16).reshape(-1, 1)
 
         def in_callback(indata, frames, time_info, status):
+            samples = indata[:, 0]
+            self.tx_level = int(np.abs(samples).max()) if len(samples) else 0
             if not self.keyed.is_set():
                 return
-            pcm16 = indata[:, 0].tobytes()
+            pcm16 = samples.tobytes()
             self.tx_queue.put(audioop.lin2ulaw(pcm16, 2))
 
         self._out_stream = sd.OutputStream(

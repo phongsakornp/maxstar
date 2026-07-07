@@ -77,6 +77,27 @@ Interactive commands once connected:
 - `u` — unkey, stop sending
 - `q` — hang up and quit
 
+## TUI
+
+```bash
+.venv/bin/python3 tui.py
+```
+
+Curses-based UI (stdlib `curses`, no new dependency). If any required
+`.env` value is missing it opens straight into a config screen instead
+of connecting blind:
+- **Config screen**: Up/Down to select a field, Enter to edit,
+  `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
+  Edits write straight back to `.env`.
+- **Monitor screen**: live RX/TX signal meters (peak-hold with decay,
+  so a meter falls smoothly rather than snapping to 0 between voice
+  frames) plus connection/key status. `k`/`u` to key/unkey, `c` to
+  reopen the config screen, `q` to quit.
+
+`iax_client.py`'s own `print()` diagnostics are silenced while the TUI
+is running (they'd otherwise corrupt curses' control of the screen) —
+use the plain CLI with `--verbose` if you need the raw frame trace.
+
 ## Diagnostic flags (no mic/speakers needed)
 
 - `--selftest` — inject a synthetic 1kHz tone, then report what echoes
