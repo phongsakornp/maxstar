@@ -421,7 +421,13 @@ class App:
         elif ch in (ord("n"), ord("N")):
             self.view = "nodes"
             self.nodes_selected = 0
-            self.refresh_connected_nodes(force=True)
+            # Not force=True: a forced refresh here would immediately
+            # hit the public stats API, which can lag 10-25s behind a
+            # just-sent connect/disconnect, undoing start_link()'s
+            # optimistic update with stale data. The periodic background
+            # refresh (already running regardless of view) keeps this
+            # reasonably fresh without that race.
+            self.refresh_connected_nodes()
             for node in self.favorites:
                 self.fetch_node_info(node)
         return True
