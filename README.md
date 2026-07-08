@@ -85,11 +85,12 @@ Interactive commands once connected:
 
 Curses-based UI (stdlib `curses`, no new dependency), styled like a
 rig's control panel (Icom IC-705-ish): bordered panel, a big block-digit
-VFO-style readout for the node number, two filled RX/TX status badges
-(solid green/red block when active, small dim outline when not — RX
-lights up on real received-audio activity, TX on the actual keyed
-state), and segmented green/yellow/red level meters with a peak-hold
-marker and a dB scale row. The scale reads dBFS (audio level relative
+VFO-style readout for the node number, two RX/TX status badges drawn as
+small rectangles (solid filled green/red block when active, a bordered
+outline when not — a real shape change instead of just toggling text
+color, so it reads clearly at a glance — RX lights up on real
+received-audio activity, TX on the actual keyed state), and segmented
+green/yellow/red level meters with a peak-hold marker and a dB scale row. The scale reads dBFS (audio level relative
 to full scale), not S-units — IAX2 carries digitized audio, not an RF
 signal report, so there's no real RSSI to show; it borrows the meter's
 visual language while staying honest about what's actually being
@@ -105,15 +106,26 @@ screen instead of connecting blind:
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
 - **Monitor screen**: `k`/`u` to key/unkey, `l` to connect to a node,
-  `d` to disconnect one, `n` for the nodes/favorites screen, `c` to
-  reopen the config screen, `q` to quit. The bottom of this screen
-  always shows a live **CONNECTED NODES** panel — whatever's currently
-  linked to yours, with callsign/location and how many nodes *that*
-  node is itself linked to, refreshed in the background — so you can
-  see it at a glance without switching screens. Up/Down selects an
-  entry, `x` disconnects the selected one directly. If more than one
-  node is linked (a multi-way net rather than a single link), the
-  count is highlighted and each entry is numbered for clarity.
+  `d` to disconnect one, `t` to toggle node telemetry, `n` for the
+  nodes/favorites screen, `c` to reopen the config screen, `q` to quit.
+  The bottom of this screen always shows a live **CONNECTED NODES**
+  panel — whatever's currently linked to yours, with callsign/location
+  and how many nodes *that* node is itself linked to, refreshed in the
+  background — so you can see it at a glance without switching screens.
+  Up/Down selects an entry, `x` disconnects the selected one directly.
+  If more than one node is linked (a multi-way net rather than a single
+  link), the count is highlighted and each entry is numbered for
+  clarity. A **TELEM ON/OFF** indicator sits next to the RX/TX badges:
+  `t` sends `*933`/`*934` (app_rpt's `cop,33`/`cop,34` — "Local
+  Telemetry Output Enable/Disable") to mute or restore the node's own
+  spoken "connected"/"disconnected" announcement. This is node-wide,
+  not per-listener — app_rpt generates that announcement once for
+  everyone currently linked, so toggling it affects anyone else on the
+  node too, not just this client. Those two function codes aren't part
+  of app_rpt's default functions table; they had to be uncommented in
+  this node's `rpt.conf` (`933 = cop,33` / `934 = cop,34`) and the
+  module reloaded (`asterisk -rx "module reload app_rpt.so"`) before
+  they'd respond to DTMF at all.
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
