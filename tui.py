@@ -72,10 +72,10 @@ CP_RED = 6
 CP_FRAME = 7
 CP_RX_ON = 8   # filled badge (background fill), not just colored text
 CP_TX_ON = 9
-CP_MUTED = 10  # bold black -- reads as dark gray on most terminals'
-               # ANSI palettes (bold remaps black to "bright black"),
-               # dimmer than CP_DIM but still legible, unlike A_DIM
-               # which many terminals don't render at all
+CP_MUTED = 10  # a true 256-color gray (see init_colors) -- dimmer than
+               # CP_DIM but still legible on any background, unlike
+               # plain black text or the A_DIM attribute, neither of
+               # which render reliably across terminals
 
 # 5-row-tall block digits for the VFO-style node number readout.
 BIG_DIGITS = {
@@ -109,7 +109,15 @@ def init_colors():
     curses.init_pair(CP_FRAME, curses.COLOR_CYAN, bg)
     curses.init_pair(CP_RX_ON, curses.COLOR_BLACK, curses.COLOR_GREEN)
     curses.init_pair(CP_TX_ON, curses.COLOR_BLACK, curses.COLOR_RED)
-    curses.init_pair(CP_MUTED, curses.COLOR_BLACK, bg)
+    # "Bold black" only reads as gray on terminals that brighten bold
+    # colors -- not universal, and plain black text on a dark/black
+    # background is simply invisible where it doesn't. An actual
+    # 256-color gray works everywhere that supports it; fall back to
+    # plain white (visible, if not literally dim) where it doesn't.
+    if curses.COLORS >= 256:
+        curses.init_pair(CP_MUTED, 244, bg)
+    else:
+        curses.init_pair(CP_MUTED, curses.COLOR_WHITE, bg)
 
 
 def read_config():
@@ -837,14 +845,11 @@ class App:
         self.rx_peak = max(rx_instant, self.rx_peak * PEAK_DECAY)
         self.tx_peak = max(tx_instant, self.tx_peak * PEAK_DECAY)
 
-        # CP_MUTED (bold black) for OFF instead of A_DIM -- A_DIM isn't
-        # reliably rendered by every terminal, but a bold-black color
-        # pair reads as dark gray almost everywhere, dim yet legible.
         if self.telemetry_on:
             telem_attr = curses.color_pair(CP_GREEN) | curses.A_BOLD
             telem_text = "TELEM ON "
         else:
-            telem_attr = curses.color_pair(CP_MUTED) | curses.A_BOLD
+            telem_attr = curses.color_pair(CP_MUTED)
             telem_text = "TELEM OFF"
         safe_addstr(stdscr, 8, 28, telem_text, telem_attr)
 
