@@ -116,16 +116,22 @@ screen instead of connecting blind:
   If more than one node is linked (a multi-way net rather than a single
   link), the count is highlighted and each entry is numbered for
   clarity. A **TELEM ON/OFF** indicator sits next to the RX/TX badges:
-  `t` sends `*933`/`*934` (app_rpt's `cop,33`/`cop,34` — "Local
-  Telemetry Output Enable/Disable") to mute or restore the node's own
-  spoken "connected"/"disconnected" announcement. This is node-wide,
-  not per-listener — app_rpt generates that announcement once for
-  everyone currently linked, so toggling it affects anyone else on the
-  node too, not just this client. Those two function codes aren't part
-  of app_rpt's default functions table; they had to be uncommented in
-  this node's `rpt.conf` (`933 = cop,33` / `934 = cop,34`) and the
-  module reloaded (`asterisk -rx "module reload app_rpt.so"`) before
-  they'd respond to DTMF at all.
+  `t` sends `*935`/`*934` (app_rpt's `cop,35`/`cop,34`) to restore or
+  mute the node's own spoken "connected"/"disconnected" announcement.
+  This is node-wide, not per-listener — app_rpt generates that
+  announcement once for everyone currently linked, so toggling it
+  affects anyone else on the node too, not just this client. `cop,35`
+  ("Local Telem mode Normal") sets app_rpt's internal `telemmode` to
+  `1`, matching what this node's `telemdefault = 2` sets at startup —
+  confirmed against app_rpt's own source
+  (`rpt_config.c`/`rpt_functions.c`), since the more obvious-sounding
+  `cop,33` ("Local Telemetry Output Enable") actually sets a different,
+  special always-on sentinel value that didn't reproduce the real
+  announcement. None of these three function codes are part of
+  app_rpt's default functions table; they had to be uncommented in this
+  node's `rpt.conf` (`933`/`934`/`935` = `cop,33`/`cop,34`/`cop,35`) and
+  the module reloaded (`asterisk -rx "module reload app_rpt.so"`)
+  before they'd respond to DTMF at all.
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
