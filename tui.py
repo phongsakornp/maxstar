@@ -23,6 +23,7 @@ import curses
 import json
 import math
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -33,11 +34,18 @@ from allstarlink_stats import (fetch_node_summary, fetch_connected_nodes,
 
 ENV_PATH = ".env"
 FAVORITES_PATH = "favorites.json"
-HISTORY_PATH = "link_history.jsonl"
-HISTORY_MAX_MEMORY = 300  # the on-disk log is append-only/unbounded --
-                          # this only caps what's kept in memory/shown
 CONNECTED_REFRESH_SECONDS = 15
 LINK_GRACE_SECONDS = 30  # > the API's observed worst-case connect/disconnect lag
+
+# Link history is logged on the node's own Pi (see pi_logger/), not by
+# this client -- so it keeps recording even when maxstar isn't running.
+# This just SSHes in to read (or prune) that log. Relies on an SSH key
+# already loaded in the agent, same as the manual rpt.conf edits earlier
+# in this project -- never runs anything with sudo (see the standing
+# no-sudo-over-ssh rule).
+HISTORY_REFRESH_SECONDS = 20
+REMOTE_LOG_TAIL_LINES = 500  # bounds what's pulled over SSH each refresh
+SSH_TIMEOUT = 8
 
 # (env key, display label, mask value on screen)
 FIELDS = [
@@ -47,6 +55,8 @@ FIELDS = [
     ("MAXSTAR_SECRET", "Secret", True),
     ("MAXSTAR_NODE", "Node", False),
     ("MAXSTAR_CONTEXT", "Context", False),
+    ("MAXSTAR_SSH_USER", "SSH User", False),
+    ("MAXSTAR_SSH_LOGGER_DIR", "SSH Logger Dir", False),
 ]
 
 MIN_WIDTH = 50
@@ -130,7 +140,43 @@ def read_config():
         config["MAXSTAR_CONTEXT"] = "iax-client"
     if not config["MAXSTAR_PORT"]:
         config["MAXSTAR_PORT"] = "4569"
+    if not config["MAXSTAR_SSH_USER"]:
+        config["MAXSTAR_SSH_USER"] = "asl"
+    if not config["MAXSTAR_SSH_LOGGER_DIR"]:
+        config["MAXSTAR_SSH_LOGGER_DIR"] = "maxstar-logger"
     return config
+
+
+def remote_log_path(cfg):
+    return f"{cfg['MAXSTAR_SSH_LOGGER_DIR']}/link_history.jsonl"
+
+
+def remote_logger_path(cfg):
+    return f"{cfg['MAXSTAR_SSH_LOGGER_DIR']}/node_link_logger.py"
+
+
+def run_ssh(cfg, remote_command, timeout=SSH_TIMEOUT):
+    """Run one non-interactive, non-sudo command on the node's Pi over
+    SSH. Returns (stdout_lines, error) -- error is None on success, or
+    a short message that's safe to show directly in the UI. Never
+    invokes sudo -- this is read/prune access to our own log file
+    only, owned by the SSH user itself, never a privileged operation."""
+    user, host = cfg["MAXSTAR_SSH_USER"], cfg["MAXSTAR_HOST"]
+    if not host:
+        return [], "no SSH host configured"
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+             f"{user}@{host}", remote_command],
+            capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [], f"ssh failed: {exc}"
+    if result.returncode != 0:
+        stderr_lines = (result.stderr or "").strip().splitlines()
+        detail = stderr_lines[-1] if stderr_lines else \
+            f"exit {result.returncode}"
+        return [], f"ssh error: {detail}"
+    return result.stdout.splitlines(), None
 
 
 def write_config(config):
@@ -155,35 +201,6 @@ def load_favorites():
 def save_favorites(favorites):
     with open(FAVORITES_PATH, "w") as f:
         json.dump(favorites, f, indent=2)
-
-
-def load_link_history(limit=HISTORY_MAX_MEMORY):
-    """Most recent connect/disconnect events, oldest first, so new
-    entries can just be appended to the end of the in-memory list."""
-    if not os.path.exists(HISTORY_PATH):
-        return []
-    try:
-        with open(HISTORY_PATH) as f:
-            lines = f.readlines()
-    except OSError:
-        return []
-    entries = []
-    for line in lines[-limit:]:
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return entries
-
-
-def append_link_history(entry):
-    """Append-only on-disk log -- a crash mid-write can at worst lose
-    the newest line, never corrupt the rest of the history."""
-    try:
-        with open(HISTORY_PATH, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except OSError:
-        pass
 
 
 def level_fraction(level):
@@ -329,12 +346,19 @@ class App:
         self.nodes_add_mode = False
         self.nodes_add_buf = ""
 
-        # Who connected to this node and when -- persists across
-        # restarts (loaded from disk here), appended to as link changes
-        # happen. See _log_link_event()/_record_link_changes().
-        self.link_history = load_link_history()
-        self._history_seeded = False
+        # Who connected to this node and when -- logged on the node's
+        # own Pi (pi_logger/node_link_logger.py), not by this client,
+        # so it keeps recording even when maxstar isn't running. This
+        # just displays whatever that log currently has, fetched over
+        # SSH. See refresh_link_history()/clean_link_history().
+        self.link_history = []
         self.history_offset = 0
+        self.history_refreshing = False
+        self.last_history_refresh = 0.0
+        self.history_error = None
+        self.history_busy = False
+        self.history_clean_mode = False
+        self.history_clean_buf = ""
 
         required = ("MAXSTAR_HOST", "MAXSTAR_USER", "MAXSTAR_SECRET",
                     "MAXSTAR_NODE")
@@ -405,44 +429,65 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _log_link_event(self, event, number, info=None):
-        """Record one connect/disconnect event: appended to the
-        in-memory list the history screen reads, and to the on-disk
-        log so it survives a restart. `info` is whatever summary we
-        already have on hand (callsign/location) -- may be partial or
-        absent for a node we've never looked up."""
-        info = info or {}
-        entry = {
-            "ts": time.time(),
-            "event": event,
-            "number": str(number),
-            "callsign": info.get("callsign", ""),
-            "location": info.get("location", ""),
-        }
-        self.link_history.append(entry)
-        del self.link_history[:-HISTORY_MAX_MEMORY]
-        append_link_history(entry)
-
-    def _record_link_changes(self, old, new):
-        """Diff two connected_nodes snapshots and log whatever appeared
-        or disappeared -- catches link changes the *other* side made
-        (someone linking to or unlinking from our node), which
-        start_link() never sees since it only fires for actions this
-        client itself takes."""
-        if not self._history_seeded:
-            # Don't log the first snapshot at startup as a wave of
-            # "connects" -- those nodes were already linked before
-            # maxstar started watching.
-            self._history_seeded = True
+    def refresh_link_history(self, force=False):
+        """Pull the node-side log (see pi_logger/node_link_logger.py)
+        over SSH. Only relevant while the history screen is open --
+        unlike refresh_connected_nodes(), nothing else on screen needs
+        this, so callers gate this on self.view == "history"."""
+        due = time.time() - self.last_history_refresh > \
+            HISTORY_REFRESH_SECONDS
+        if self.history_refreshing or not (force or due):
             return
-        old_by_num = {n["number"]: n for n in old}
-        new_by_num = {n["number"]: n for n in new}
-        for number, info in new_by_num.items():
-            if number not in old_by_num:
-                self._log_link_event("connect", number, info)
-        for number, info in old_by_num.items():
-            if number not in new_by_num:
-                self._log_link_event("disconnect", number, info)
+        self.history_refreshing = True
+        cfg = self.config
+
+        def worker():
+            try:
+                remote_cmd = f"tail -n {REMOTE_LOG_TAIL_LINES} " \
+                             f"{remote_log_path(cfg)}"
+                lines, error = run_ssh(cfg, remote_cmd)
+                if error is None:
+                    entries = []
+                    for line in lines:
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+                    self.link_history = entries
+                    self.history_error = None
+                else:
+                    self.history_error = error
+                self.last_history_refresh = time.time()
+            finally:
+                self.history_refreshing = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def clean_link_history(self, keep_days):
+        """Trigger the node-side logger's own --clean mode over SSH --
+        prunes entries older than keep_days and rewrites the log file
+        in place, on the Pi. Never touched locally: this client has no
+        local copy of the log to prune, only whatever's currently
+        fetched for display."""
+        self.history_busy = True
+        self.link_status = f"cleaning history (keep {keep_days}d) ..."
+        cfg = self.config
+
+        def worker():
+            try:
+                remote_cmd = (f"python3 {remote_logger_path(cfg)} --clean "
+                              f"--keep-days {keep_days} --log "
+                              f"{remote_log_path(cfg)}")
+                lines, error = run_ssh(cfg, remote_cmd, timeout=20)
+                if error is None:
+                    self.link_status = lines[-1] if lines else "cleaned"
+                    self.refresh_link_history(force=True)
+                else:
+                    self.link_status = error
+            finally:
+                self.history_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def refresh_connected_nodes(self, force=False):
         # Hard lock, not just a nudged timestamp: the public stats API
@@ -463,7 +508,6 @@ class App:
         def worker():
             try:
                 nodes = fetch_connected_nodes(node)
-                self._record_link_changes(self.connected_nodes, nodes)
                 self.connected_nodes = nodes
                 self.last_connected_refresh = time.time()
                 for n in nodes:
@@ -563,6 +607,7 @@ class App:
         elif ch in (ord("h"), ord("H")):
             self.view = "history"
             self.history_offset = 0
+            self.refresh_link_history()
         elif ch in (ord("n"), ord("N")):
             self.view = "nodes"
             self.nodes_selected = 0
@@ -613,17 +658,12 @@ class App:
                 # slow-to-update API response doesn't immediately
                 # overwrite this with stale data.
                 if mode == "disconnect":
-                    removed = next((n for n in self.connected_nodes
-                                    if n["number"] == node), None)
                     self.connected_nodes = [n for n in self.connected_nodes
                                             if n["number"] != node]
                     self.link_status = f"disconnected {node}"
-                    if removed is not None:
-                        self._log_link_event("disconnect", node, removed)
                 else:
-                    already = any(n["number"] == node
-                                  for n in self.connected_nodes)
-                    if not already:
+                    if not any(n["number"] == node
+                               for n in self.connected_nodes):
                         info = (self.node_info_cache.get(node) or
                                 fetch_node_summary(node) or
                                 {"callsign": "", "location": "",
@@ -631,7 +671,6 @@ class App:
                         entry = dict(info, number=node)
                         self.node_info_cache[node] = info
                         self.connected_nodes = self.connected_nodes + [entry]
-                        self._log_link_event("connect", node, info)
                     self.link_status = f"connected to {node}"
                 # Suppress any refresh (periodic or forced) for a while
                 # -- longer than the API's observed worst-case lag --
@@ -772,6 +811,21 @@ class App:
         return True
 
     def handle_history_key(self, ch):
+        if self.history_clean_mode:
+            if ch == 27:  # Esc cancels
+                self.history_clean_mode = False
+                self.history_clean_buf = ""
+            elif ch in (curses.KEY_ENTER, 10, 13):
+                if self.history_clean_buf:
+                    self.clean_link_history(int(self.history_clean_buf))
+                self.history_clean_mode = False
+                self.history_clean_buf = ""
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                self.history_clean_buf = self.history_clean_buf[:-1]
+            elif ord("0") <= ch <= ord("9"):
+                self.history_clean_buf += chr(ch)
+            return True
+
         if ch in (ord("q"), ord("Q")):
             return False
         elif ch in (27, ord("h"), ord("H")):
@@ -781,6 +835,12 @@ class App:
                                       max(0, len(self.link_history) - 1))
         elif ch == curses.KEY_DOWN:
             self.history_offset = max(self.history_offset - 1, 0)
+        elif ch in (ord("r"), ord("R")):
+            self.refresh_link_history(force=True)
+        elif ch in (ord("c"), ord("C")):
+            if not self.history_busy:
+                self.history_clean_mode = True
+                self.history_clean_buf = ""
         return True
 
     # ---- drawing ------------------------------------------------------
@@ -920,21 +980,39 @@ class App:
                             curses.color_pair(CP_TEXT))
 
     def draw_history(self):
-        """Log of who connected to this node and when -- only covers
-        the time maxstar itself has been running/watching (see
-        _record_link_changes), not a full node-side audit trail."""
+        """Log of who connected to/disconnected from this node and
+        when -- logged on the node's own Pi (pi_logger/), fetched over
+        SSH, so it covers link changes even while maxstar wasn't
+        running to see them directly."""
+        self.refresh_link_history()  # kept fresh while this screen is open
         stdscr = self.stdscr
         height, width = stdscr.getmaxyx()
         draw_box(stdscr, 0, 0, height, width, title="LINK HISTORY")
         hint_attr = curses.color_pair(CP_DIM) | curses.A_DIM
-        safe_addstr(stdscr, 1, 2, "↑/↓ scroll  h/Esc back  q quit",
+        safe_addstr(stdscr, 1, 2,
+                    "↑/↓ scroll  r refresh  c clean  h/Esc back  q quit",
                     hint_attr)
 
         total = len(self.link_history)
-        safe_addstr(stdscr, 2, 2,
-                    f"{total} event{'s' if total != 1 else ''} logged "
-                    "since maxstar started watching this node",
+        header = f"{total} event{'s' if total != 1 else ''} on the node"
+        if self.history_refreshing:
+            header += "  refreshing..."
+        safe_addstr(stdscr, 2, 2, header,
                     curses.color_pair(CP_CYAN) | curses.A_BOLD)
+        if self.history_error:
+            safe_addstr(stdscr, 3, 2, f"! {self.history_error}"[:width - 4],
+                        curses.color_pair(CP_RED) | curses.A_BOLD)
+
+        if self.history_clean_mode:
+            safe_addstr(stdscr, height - 2, 2,
+                        f"clean: keep last how many days? "
+                        f"{self.history_clean_buf}_",
+                        curses.color_pair(CP_YELLOW) | curses.A_BOLD)
+        elif self.history_busy or self.link_status:
+            msg = self.link_status if not self.history_busy else \
+                f"» {self.link_status}"
+            safe_addstr(stdscr, height - 2, 2, msg[:width - 4],
+                        curses.color_pair(CP_YELLOW) | curses.A_BOLD)
 
         top_row = 4
         bottom_row = height - 3
@@ -964,10 +1042,11 @@ class App:
             text = f"{marker} {ts}  {number:<8} {detail}"[:line_width]
             safe_addstr(stdscr, top_row + i, 2, text, attr)
         if len(ordered) > visible:
-            safe_addstr(stdscr, height - 2, 2,
-                        f"{self.history_offset + 1}-"
-                        f"{self.history_offset + len(window)} of "
-                        f"{len(ordered)}", hint_attr)
+            paging = (f"{self.history_offset + 1}-"
+                      f"{self.history_offset + len(window)} of "
+                      f"{len(ordered)}")
+            safe_addstr(stdscr, 2, max(2, width - len(paging) - 3),
+                        paging, hint_attr)
 
     def draw_monitor(self):
         stdscr = self.stdscr

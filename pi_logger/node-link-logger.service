@@ -1,0 +1,15 @@
+[Unit]
+Description=maxstar link-history logger for AllStarLink node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Replace YOUR_NODE_NUMBER -- deliberately not filled in here so a
+# real node number never ends up committed to this repo's history.
+ExecStart=/usr/bin/python3 %h/maxstar-logger/node_link_logger.py --node YOUR_NODE_NUMBER --log %h/maxstar-logger/link_history.jsonl
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

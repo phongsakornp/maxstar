@@ -145,27 +145,75 @@ screen instead of connecting blind:
   and confirmed not to work here, since this connection's function-code
   decoder listens for actual DTMF frame events, not in-band tone
   detection on the rxchannel audio.
-- **History screen** (`h`): a log of every node that has connected to
-  or disconnected from yours, newest first, with a timestamp and
+- **History screen** (`h`): a log of every node that has connected
+  *directly* to yours and when, newest first, with a timestamp and
   whatever callsign/location info was on hand at the time (green `+`
   for connect, red `-` for disconnect). Up/Down scrolls once it grows
-  past one screenful. Two sources feed it: your own `l`/`d`/nodes-screen
-  actions (logged immediately, optimistically, same as the CONNECTED
-  NODES panel) and a diff against each periodic
-  `stats.allstarlink.org` refresh (catches links *other* people make or
-  drop, which your own client never directly sees). The very first
-  snapshot at startup is treated as a baseline, not a wave of
-  "connects" — only nodes already linked before maxstar starts
-  watching are excluded that way. Persists across restarts in
-  `link_history.jsonl` (gitignored, like `.env`/`favorites.json` —
-  append-only, one JSON object per line), but only covers link changes
-  that happened while some maxstar instance was running to see
-  them — it is not a full node-side audit trail (that would live in
-  Asterisk's own logs on the Pi, outside this client's control).
+  past one screenful, `r` forces an immediate refresh, `c` prompts for
+  a number of days and prunes anything older (see below). This is
+  deliberately *not* logged by maxstar itself — the log is written by
+  a small standalone script running on the node's own Pi
+  (`pi_logger/node_link_logger.py`, see "Node-side link history
+  logger" below), so it keeps recording connects/disconnects even when
+  no Mac is running maxstar at all. This screen just SSHes in
+  (`MAXSTAR_SSH_USER`/`MAXSTAR_SSH_LOGGER_DIR`, defaulting to
+  `asl`/`maxstar-logger`) and tails that log for display, or — for
+  `c` — re-invokes the same script's own `--clean --keep-days N` mode
+  remotely to prune it. Neither ever runs anything with `sudo`; both
+  only touch a file already owned by the SSH user. Because the logger
+  only ever asks `stats.allstarlink.org` for *your* node's own
+  `linkedNodes`, it only ever sees direct links to your node — a node
+  connected to one of your links (e.g. some third node linked to
+  `68777`, which is itself linked to you) is never logged, only
+  `68777` itself would be.
 
 `iax_client.py`'s own `print()` diagnostics are silenced while the TUI
 is running (they'd otherwise corrupt curses' control of the screen) —
 use the plain CLI with `--verbose` if you need the raw frame trace.
+
+## Node-side link history logger
+
+`pi_logger/node_link_logger.py` is a separate, self-contained script
+(stdlib only) meant to run continuously **on the node's own Pi**, not
+on the Mac — that's what lets link history keep recording connects and
+disconnects even when maxstar isn't running anywhere. It polls
+`stats.allstarlink.org` for the node's own direct links every 15s
+(same technique and lag characteristics as the TUI's own CONNECTED
+NODES panel) and appends one JSON line per connect/disconnect to a log
+file. `--clean --keep-days N` prunes anything older than N days and
+rewrites the file in place; the TUI's history screen (`c`) just
+invokes this same flag remotely.
+
+Deploy it once per Pi:
+
+```bash
+ssh asl@maxwell 'mkdir -p ~/maxstar-logger ~/.config/systemd/user'
+scp pi_logger/node_link_logger.py asl@maxwell:~/maxstar-logger/
+scp pi_logger/node-link-logger.service \
+    asl@maxwell:~/.config/systemd/user/
+# Edit YOUR_NODE_NUMBER in the copied .service file to your real node
+# number first (kept out of this repo deliberately -- see below).
+ssh asl@maxwell '\
+  sed -i "s/YOUR_NODE_NUMBER/42865/" \
+      ~/.config/systemd/user/node-link-logger.service && \
+  systemctl --user daemon-reload && \
+  systemctl --user enable --now node-link-logger'
+```
+
+Then, **run this one yourself** (it needs `sudo`, so it's not something
+this client should ever run over SSH on your behalf — see the
+no-sudo-over-ssh note elsewhere in this project): `sudo loginctl
+enable-linger asl` on the Pi, so the user service keeps running even
+with no one logged in. Without it, the logger stops the moment the SSH
+session that enabled it closes.
+
+`node-link-logger.service` ships with `YOUR_NODE_NUMBER` as a literal
+placeholder rather than the real node number, on purpose — this
+directory is checked into git, and the node number is the one piece of
+this setup worth keeping out of a public diff even though it isn't a
+secret. `MAXSTAR_SSH_USER`/`MAXSTAR_SSH_LOGGER_DIR` in `.env` must
+match wherever you actually deployed it (`asl`/`maxstar-logger` by
+default).
 
 ## Linking to another node (CLI)
 
