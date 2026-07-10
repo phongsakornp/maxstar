@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 .env
 favorites.json
+link_history.jsonl

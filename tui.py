@@ -33,6 +33,9 @@ from allstarlink_stats import (fetch_node_summary, fetch_connected_nodes,
 
 ENV_PATH = ".env"
 FAVORITES_PATH = "favorites.json"
+HISTORY_PATH = "link_history.jsonl"
+HISTORY_MAX_MEMORY = 300  # the on-disk log is append-only/unbounded --
+                          # this only caps what's kept in memory/shown
 CONNECTED_REFRESH_SECONDS = 15
 LINK_GRACE_SECONDS = 30  # > the API's observed worst-case connect/disconnect lag
 
@@ -152,6 +155,35 @@ def load_favorites():
 def save_favorites(favorites):
     with open(FAVORITES_PATH, "w") as f:
         json.dump(favorites, f, indent=2)
+
+
+def load_link_history(limit=HISTORY_MAX_MEMORY):
+    """Most recent connect/disconnect events, oldest first, so new
+    entries can just be appended to the end of the in-memory list."""
+    if not os.path.exists(HISTORY_PATH):
+        return []
+    try:
+        with open(HISTORY_PATH) as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    entries = []
+    for line in lines[-limit:]:
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def append_link_history(entry):
+    """Append-only on-disk log -- a crash mid-write can at worst lose
+    the newest line, never corrupt the rest of the history."""
+    try:
+        with open(HISTORY_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
 
 
 def level_fraction(level):
@@ -297,6 +329,13 @@ class App:
         self.nodes_add_mode = False
         self.nodes_add_buf = ""
 
+        # Who connected to this node and when -- persists across
+        # restarts (loaded from disk here), appended to as link changes
+        # happen. See _log_link_event()/_record_link_changes().
+        self.link_history = load_link_history()
+        self._history_seeded = False
+        self.history_offset = 0
+
         required = ("MAXSTAR_HOST", "MAXSTAR_USER", "MAXSTAR_SECRET",
                     "MAXSTAR_NODE")
         self.view = "monitor" if all(self.config[k] for k in required) \
@@ -366,6 +405,45 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _log_link_event(self, event, number, info=None):
+        """Record one connect/disconnect event: appended to the
+        in-memory list the history screen reads, and to the on-disk
+        log so it survives a restart. `info` is whatever summary we
+        already have on hand (callsign/location) -- may be partial or
+        absent for a node we've never looked up."""
+        info = info or {}
+        entry = {
+            "ts": time.time(),
+            "event": event,
+            "number": str(number),
+            "callsign": info.get("callsign", ""),
+            "location": info.get("location", ""),
+        }
+        self.link_history.append(entry)
+        del self.link_history[:-HISTORY_MAX_MEMORY]
+        append_link_history(entry)
+
+    def _record_link_changes(self, old, new):
+        """Diff two connected_nodes snapshots and log whatever appeared
+        or disappeared -- catches link changes the *other* side made
+        (someone linking to or unlinking from our node), which
+        start_link() never sees since it only fires for actions this
+        client itself takes."""
+        if not self._history_seeded:
+            # Don't log the first snapshot at startup as a wave of
+            # "connects" -- those nodes were already linked before
+            # maxstar started watching.
+            self._history_seeded = True
+            return
+        old_by_num = {n["number"]: n for n in old}
+        new_by_num = {n["number"]: n for n in new}
+        for number, info in new_by_num.items():
+            if number not in old_by_num:
+                self._log_link_event("connect", number, info)
+        for number, info in old_by_num.items():
+            if number not in new_by_num:
+                self._log_link_event("disconnect", number, info)
+
     def refresh_connected_nodes(self, force=False):
         # Hard lock, not just a nudged timestamp: the public stats API
         # has been observed lagging up to ~25s behind a real disconnect
@@ -385,6 +463,7 @@ class App:
         def worker():
             try:
                 nodes = fetch_connected_nodes(node)
+                self._record_link_changes(self.connected_nodes, nodes)
                 self.connected_nodes = nodes
                 self.last_connected_refresh = time.time()
                 for n in nodes:
@@ -439,6 +518,8 @@ class App:
             return self.handle_config_key(ch)
         if self.view == "nodes":
             return self.handle_nodes_key(ch)
+        if self.view == "history":
+            return self.handle_history_key(ch)
         return self.handle_monitor_key(ch)
 
     def handle_monitor_key(self, ch):
@@ -479,6 +560,9 @@ class App:
                 self.start_link("disconnect", node["number"])
         elif ch in (ord("t"), ord("T")):
             self.toggle_telemetry()
+        elif ch in (ord("h"), ord("H")):
+            self.view = "history"
+            self.history_offset = 0
         elif ch in (ord("n"), ord("N")):
             self.view = "nodes"
             self.nodes_selected = 0
@@ -529,12 +613,17 @@ class App:
                 # slow-to-update API response doesn't immediately
                 # overwrite this with stale data.
                 if mode == "disconnect":
+                    removed = next((n for n in self.connected_nodes
+                                    if n["number"] == node), None)
                     self.connected_nodes = [n for n in self.connected_nodes
                                             if n["number"] != node]
                     self.link_status = f"disconnected {node}"
+                    if removed is not None:
+                        self._log_link_event("disconnect", node, removed)
                 else:
-                    if not any(n["number"] == node
-                               for n in self.connected_nodes):
+                    already = any(n["number"] == node
+                                  for n in self.connected_nodes)
+                    if not already:
                         info = (self.node_info_cache.get(node) or
                                 fetch_node_summary(node) or
                                 {"callsign": "", "location": "",
@@ -542,6 +631,7 @@ class App:
                         entry = dict(info, number=node)
                         self.node_info_cache[node] = info
                         self.connected_nodes = self.connected_nodes + [entry]
+                        self._log_link_event("connect", node, info)
                     self.link_status = f"connected to {node}"
                 # Suppress any refresh (periodic or forced) for a while
                 # -- longer than the API's observed worst-case lag --
@@ -681,6 +771,18 @@ class App:
             self.nodes_add_buf = ""
         return True
 
+    def handle_history_key(self, ch):
+        if ch in (ord("q"), ord("Q")):
+            return False
+        elif ch in (27, ord("h"), ord("H")):
+            self.view = "monitor"
+        elif ch == curses.KEY_UP:
+            self.history_offset = min(self.history_offset + 1,
+                                      max(0, len(self.link_history) - 1))
+        elif ch == curses.KEY_DOWN:
+            self.history_offset = max(self.history_offset - 1, 0)
+        return True
+
     # ---- drawing ------------------------------------------------------
 
     def draw(self):
@@ -697,6 +799,8 @@ class App:
                 self.draw_config()
             elif self.view == "nodes":
                 self.draw_nodes()
+            elif self.view == "history":
+                self.draw_history()
             else:
                 self.draw_monitor()
         except curses.error:
@@ -815,6 +919,56 @@ class App:
                 safe_addstr(stdscr, row, 2, text, attr or
                             curses.color_pair(CP_TEXT))
 
+    def draw_history(self):
+        """Log of who connected to this node and when -- only covers
+        the time maxstar itself has been running/watching (see
+        _record_link_changes), not a full node-side audit trail."""
+        stdscr = self.stdscr
+        height, width = stdscr.getmaxyx()
+        draw_box(stdscr, 0, 0, height, width, title="LINK HISTORY")
+        hint_attr = curses.color_pair(CP_DIM) | curses.A_DIM
+        safe_addstr(stdscr, 1, 2, "↑/↓ scroll  h/Esc back  q quit",
+                    hint_attr)
+
+        total = len(self.link_history)
+        safe_addstr(stdscr, 2, 2,
+                    f"{total} event{'s' if total != 1 else ''} logged "
+                    "since maxstar started watching this node",
+                    curses.color_pair(CP_CYAN) | curses.A_BOLD)
+
+        top_row = 4
+        bottom_row = height - 3
+        if not self.link_history:
+            safe_addstr(stdscr, top_row, 2, "(none yet)",
+                        curses.color_pair(CP_DIM) | curses.A_DIM)
+            return
+
+        visible = max(0, bottom_row - top_row)
+        ordered = list(reversed(self.link_history))  # newest first
+        self.history_offset = min(self.history_offset,
+                                  max(0, len(ordered) - 1))
+        window = ordered[self.history_offset:self.history_offset + visible]
+        line_width = max(20, width - 26)
+        for i, entry in enumerate(window):
+            ts = time.strftime("%m-%d %H:%M:%S",
+                               time.localtime(entry.get("ts", 0)))
+            number = entry.get("number", "")
+            detail = "  ".join(b for b in (entry.get("callsign"),
+                                           entry.get("location")) if b)
+            if entry.get("event") == "connect":
+                marker = "+"
+                attr = curses.color_pair(CP_GREEN) | curses.A_BOLD
+            else:
+                marker = "-"
+                attr = curses.color_pair(CP_RED) | curses.A_BOLD
+            text = f"{marker} {ts}  {number:<8} {detail}"[:line_width]
+            safe_addstr(stdscr, top_row + i, 2, text, attr)
+        if len(ordered) > visible:
+            safe_addstr(stdscr, height - 2, 2,
+                        f"{self.history_offset + 1}-"
+                        f"{self.history_offset + len(window)} of "
+                        f"{len(ordered)}", hint_attr)
+
     def draw_monitor(self):
         stdscr = self.stdscr
         cfg = self.config
@@ -882,7 +1036,8 @@ class App:
 
         safe_addstr(stdscr, height - 2, 2,
                     "k key  u unkey  l link  d disc  ↑/↓+x disconnect "
-                    "selected  t telemetry  n nodes  c cfg  q quit",
+                    "selected  t telemetry  h history  n nodes  c cfg  "
+                    "q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
     def draw_connected_panel(self, top, bottom, width):

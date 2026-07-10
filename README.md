@@ -106,8 +106,9 @@ screen instead of connecting blind:
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
 - **Monitor screen**: `k`/`u` to key/unkey, `l` to connect to a node,
-  `d` to disconnect one, `t` to toggle node telemetry, `n` for the
-  nodes/favorites screen, `c` to reopen the config screen, `q` to quit.
+  `d` to disconnect one, `t` to toggle node telemetry, `h` for the
+  link-history screen, `n` for the nodes/favorites screen, `c` to
+  reopen the config screen, `q` to quit.
   The bottom of this screen always shows a live **CONNECTED NODES**
   panel — whatever's currently linked to yours, with callsign/location
   and how many nodes *that* node is itself linked to, refreshed in the
@@ -144,6 +145,23 @@ screen instead of connecting blind:
   and confirmed not to work here, since this connection's function-code
   decoder listens for actual DTMF frame events, not in-band tone
   detection on the rxchannel audio.
+- **History screen** (`h`): a log of every node that has connected to
+  or disconnected from yours, newest first, with a timestamp and
+  whatever callsign/location info was on hand at the time (green `+`
+  for connect, red `-` for disconnect). Up/Down scrolls once it grows
+  past one screenful. Two sources feed it: your own `l`/`d`/nodes-screen
+  actions (logged immediately, optimistically, same as the CONNECTED
+  NODES panel) and a diff against each periodic
+  `stats.allstarlink.org` refresh (catches links *other* people make or
+  drop, which your own client never directly sees). The very first
+  snapshot at startup is treated as a baseline, not a wave of
+  "connects" — only nodes already linked before maxstar starts
+  watching are excluded that way. Persists across restarts in
+  `link_history.jsonl` (gitignored, like `.env`/`favorites.json` —
+  append-only, one JSON object per line), but only covers link changes
+  that happened while some maxstar instance was running to see
+  them — it is not a full node-side audit trail (that would live in
+  Asterisk's own logs on the Pi, outside this client's control).
 
 `iax_client.py`'s own `print()` diagnostics are silenced while the TUI
 is running (they'd otherwise corrupt curses' control of the screen) —
