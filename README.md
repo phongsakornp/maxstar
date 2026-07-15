@@ -55,6 +55,57 @@ exten => <YOUR_NODE>,1,rpt(<YOUR_NODE>,X)
 Dialing your own node number (`<YOUR_NODE>`) connects you as the node's
 radio input — see "Single-seat connections" below.
 
+### Node telemetry (connect/disconnect announcements)
+
+app_rpt can play a spoken "connected"/"disconnected" announcement on
+the node itself every time a link connects or drops. This is node-wide
+audio, not per-listener — it goes out over every currently-connected
+link exactly like any other node audio, so everyone linked at that
+moment hears it, not just whoever caused the event. `maxstar` doesn't
+control this (it used to have a `t`-key toggle, since removed — the
+default below is what everyone should hear, and toggling it live was
+more likely to cause confusion than help).
+
+This node's default is set to **off** via `telemdefault = 0` in
+`/etc/asterisk/rpt.conf`'s `[node-main]` template (`0` = telemetry
+output off; `2`, the stock default, is "timed telemetry output on
+command execution and for a short time thereafter" — the announcement
+that used to fire on every connect/disconnect). That default only
+takes effect when app_rpt itself (re)initializes — Asterisk restarting
+or the module reloading — not when any client connects/disconnects,
+so it stays off across every maxstar/Zoiper/etc. session without
+either of them doing anything.
+
+To turn it on or off for a live session (reverts to the `rpt.conf`
+default on the next Asterisk restart/module reload), send the DTMF
+function code from any connected client, or run it directly from the
+Pi:
+```
+# from any connected IAX client, dial DTMF:
+*935   ; telemetry on  (cop,35 -- "Local Telem mode Normal")
+*934   ; telemetry off (cop,34)
+
+# or, on the Pi itself:
+asterisk -rx "rpt cmd <NODE> cop 35"   # on
+asterisk -rx "rpt cmd <NODE> cop 34"   # off
+```
+(`cop,33`, "Local Telemetry Output Enable", looks like the obvious
+choice but actually sets a different, special always-on sentinel value
+that doesn't match the real announcement — confirmed against app_rpt's
+own source, `rpt_config.c`/`rpt_functions.c`. Use `cop,35`/`cop,34`.)
+These three function codes aren't in app_rpt's default functions
+table; they were uncommented in this node's `rpt.conf`
+(`933`/`934`/`935` = `cop,33`/`cop,34`/`cop,35`) and the module
+reloaded (`asterisk -rx "module reload app_rpt.so"`) before they'd
+respond to DTMF at all.
+
+To change the persistent default instead of a one-off session toggle,
+edit `telemdefault` in `/etc/asterisk/rpt.conf` and reload:
+```
+sudo sed -i 's/^telemdefault = ./telemdefault = <0|1|2>/' /etc/asterisk/rpt.conf
+sudo asterisk -rx "module reload app_rpt.so"
+```
+
 ## Usage
 
 ```bash
@@ -106,9 +157,8 @@ screen instead of connecting blind:
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
 - **Monitor screen**: `k`/`u` to key/unkey, `l` to connect to a node,
-  `d` to disconnect one, `t` to toggle node telemetry, `h` for the
-  link-history screen, `n` for the nodes/favorites screen, `c` to
-  reopen the config screen, `q` to quit.
+  `d` to disconnect one, `h` for the link-history screen, `n` for the
+  nodes/favorites screen, `c` to reopen the config screen, `q` to quit.
   The bottom of this screen always shows a live **CONNECTED NODES**
   panel — whatever's currently linked to yours, with callsign/location
   and how many nodes *that* node is itself linked to, refreshed in the
@@ -116,23 +166,7 @@ screen instead of connecting blind:
   Up/Down selects an entry, `x` disconnects the selected one directly.
   If more than one node is linked (a multi-way net rather than a single
   link), the count is highlighted and each entry is numbered for
-  clarity. A **TELEM ON/OFF** indicator sits next to the RX/TX badges:
-  `t` sends `*935`/`*934` (app_rpt's `cop,35`/`cop,34`) to restore or
-  mute the node's own spoken "connected"/"disconnected" announcement.
-  This is node-wide, not per-listener — app_rpt generates that
-  announcement once for everyone currently linked, so toggling it
-  affects anyone else on the node too, not just this client. `cop,35`
-  ("Local Telem mode Normal") sets app_rpt's internal `telemmode` to
-  `1`, matching what this node's `telemdefault = 2` sets at startup —
-  confirmed against app_rpt's own source
-  (`rpt_config.c`/`rpt_functions.c`), since the more obvious-sounding
-  `cop,33` ("Local Telemetry Output Enable") actually sets a different,
-  special always-on sentinel value that didn't reproduce the real
-  announcement. None of these three function codes are part of
-  app_rpt's default functions table; they had to be uncommented in this
-  node's `rpt.conf` (`933`/`934`/`935` = `cop,33`/`cop,34`/`cop,35`) and
-  the module reloaded (`asterisk -rx "module reload app_rpt.so"`)
-  before they'd respond to DTMF at all.
+  clarity.
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
