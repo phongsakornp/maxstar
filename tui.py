@@ -37,6 +37,12 @@ FAVORITES_PATH = "favorites.json"
 CONNECTED_REFRESH_SECONDS = 15
 LINK_GRACE_SECONDS = 30  # > the API's observed worst-case connect/disconnect lag
 
+# Safety net for the spacebar PTT toggle: unlike a real hold-to-talk
+# button, a toggle can be left keyed by accident with nothing to force
+# an unkey (no release event). Auto-unkey after this long continuously
+# keyed, same idea as a repeater's own time-out timer.
+TX_TIMEOUT_SECONDS = 90
+
 # Link history is logged on the node's own Pi (see pi_logger/), not by
 # this client -- so it keeps recording even when maxstar isn't running.
 # This just SSHes in to read (or prune) that log. Relies on an SSH key
@@ -310,6 +316,8 @@ class App:
         self.link_status = ""
         self.link_busy = False
 
+        self.keyed_since = None  # time.time() PTT was toggled on, else None
+
         self.favorites = load_favorites()
         self.node_info_cache = {}    # node number -> summary dict / "loading"
         self.fetching_nodes = set()  # node numbers with a fetch in flight
@@ -354,6 +362,7 @@ class App:
                        cfg["MAXSTAR_USER"], cfg["MAXSTAR_SECRET"],
                        cfg["MAXSTAR_NODE"], cfg["MAXSTAR_CONTEXT"])
         self.call = call
+        self.keyed_since = None
 
         def worker():
             if call.connect(timeout=8.0):
@@ -508,6 +517,7 @@ class App:
             while running:
                 ch = self.stdscr.getch()
                 running = self.handle_key(ch)
+                self.check_tx_timeout()
                 self.draw()
         finally:
             self._shutdown_call(self.call)
@@ -550,12 +560,8 @@ class App:
 
         if ch in (ord("q"), ord("Q")):
             return False
-        elif ch in (ord("k"), ord("K")):
-            if self.call:
-                self.call.key()
-        elif ch in (ord("u"), ord("U")):
-            if self.call:
-                self.call.unkey()
+        elif ch == ord(" "):
+            self.toggle_ptt()
         elif ch in (ord("c"), ord("C")):
             self.view = "config"
             self.selected = 0
@@ -597,6 +603,30 @@ class App:
             for node in self.favorites:
                 self.fetch_node_info(node)
         return True
+
+    def toggle_ptt(self):
+        if not self.call:
+            return
+        if self.call.keyed.is_set():
+            self.call.unkey()
+            self.keyed_since = None
+        else:
+            self.call.key()
+            self.keyed_since = time.time()
+
+    def check_tx_timeout(self):
+        """Safety net for the toggle-style PTT: a toggle has no release
+        event to fall back on like a real hold-to-talk button would, so
+        an accidental or forgotten keyup can leave the mic open
+        indefinitely. Auto-unkey past TX_TIMEOUT_SECONDS, same idea as
+        a repeater's own time-out timer."""
+        if self.keyed_since is None or not self.call:
+            return
+        if time.time() - self.keyed_since > TX_TIMEOUT_SECONDS:
+            self.call.unkey()
+            self.keyed_since = None
+            self.link_status = (
+                f"TX timeout -- auto-unkeyed after {TX_TIMEOUT_SECONDS}s")
 
     def handle_link_key(self, ch):
         if ch == 27:  # Esc cancels
@@ -1026,6 +1056,13 @@ class App:
         rx_active = self.rx_display > RX_ACTIVE_THRESHOLD
         draw_badge(stdscr, 4, 28, "RX", rx_active, CP_RX_ON)
         draw_badge(stdscr, 4, 36, "TX", keyed, CP_TX_ON)
+        if self.keyed_since is not None:
+            remaining = max(
+                0, TX_TIMEOUT_SECONDS - (time.time() - self.keyed_since))
+            mins, secs = divmod(int(remaining), 60)
+            countdown_attr = curses.color_pair(CP_RED) | curses.A_BOLD \
+                if remaining <= 15 else curses.color_pair(CP_YELLOW)
+            safe_addstr(stdscr, 5, 44, f"{mins}:{secs:02d}", countdown_attr)
         self.rx_peak = max(rx_instant, self.rx_peak * PEAK_DECAY)
         self.tx_peak = max(tx_instant, self.tx_peak * PEAK_DECAY)
 
@@ -1050,7 +1087,7 @@ class App:
         self.draw_connected_panel(18, height - 3, width)
 
         safe_addstr(stdscr, height - 2, 2,
-                    "k key  u unkey  l link  d disc  ↑/↓+x disconnect "
+                    "space ptt  l link  d disc  ↑/↓+x disconnect "
                     "selected  h history  n nodes  c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 

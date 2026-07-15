@@ -156,9 +156,10 @@ screen instead of connecting blind:
 - **Config screen**: Up/Down to select a field, Enter to edit,
   `s` to save + (re)connect, Esc to go back once connected, `q` to quit.
   Edits write straight back to `.env`.
-- **Monitor screen**: `k`/`u` to key/unkey, `l` to connect to a node,
-  `d` to disconnect one, `h` for the link-history screen, `n` for the
-  nodes/favorites screen, `c` to reopen the config screen, `q` to quit.
+- **Monitor screen**: Space toggles PTT (key up, key down again to
+  unkey), `l` to connect to a node, `d` to disconnect one, `h` for the
+  link-history screen, `n` for the nodes/favorites screen, `c` to
+  reopen the config screen, `q` to quit.
   The bottom of this screen always shows a live **CONNECTED NODES**
   panel — whatever's currently linked to yours, with callsign/location
   and how many nodes *that* node is itself linked to, refreshed in the
@@ -167,6 +168,18 @@ screen instead of connecting blind:
   If more than one node is linked (a multi-way net rather than a single
   link), the count is highlighted and each entry is numbered for
   clarity.
+
+  Space is a toggle, not a real hold-to-talk button — a terminal has
+  no way to detect a key being physically held down versus pressed
+  repeatedly, especially over SSH where repeat timing gets mangled by
+  latency, so toggle is the reliable option. The real risk with a
+  toggle over a hold button is a silently "stuck" open mic (no release
+  event to fall back on if you forget or mis-tap), so as a safety net
+  it auto-unkeys after `TX_TIMEOUT_SECONDS` (90s) of continuous
+  keyed time and shows a `TX timeout` message — the same idea as a
+  repeater's own time-out timer. A countdown next to the TX badge
+  (yellow, turning red under 15s) counts down while keyed so it's
+  never a surprise.
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
