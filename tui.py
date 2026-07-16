@@ -495,6 +495,13 @@ class App:
         def worker():
             try:
                 nodes = fetch_connected_nodes(node)
+                # The lock guard above only stops a *new* fetch from
+                # starting -- it doesn't stop one already in flight (kicked
+                # off just before a connect/disconnect) from finishing
+                # afterward and clobbering start_link()'s optimistic update
+                # with a response that predates it. Re-check here too.
+                if time.time() < self.link_lock_until:
+                    return
                 self.connected_nodes = nodes
                 self.last_connected_refresh = time.time()
                 for n in nodes:
