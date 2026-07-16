@@ -164,7 +164,8 @@ screen instead of connecting blind:
   panel — whatever's currently linked to yours, with callsign/location
   and how many nodes *that* node is itself linked to, refreshed in the
   background — so you can see it at a glance without switching screens.
-  Up/Down selects an entry, `x` disconnects the selected one directly.
+  Up/Down selects an entry, `x` disconnects the selected one directly,
+  `i` opens that node's own link list (see below).
   If more than one node is linked (a multi-way net rather than a single
   link), the count is highlighted and each entry is numbered for
   clarity.
@@ -183,7 +184,8 @@ screen instead of connecting blind:
 - **Nodes screen** (`n`): the same connected-nodes list plus a
   favorites list, both interactive here. `a` adds a favorite by node
   number, `r` removes the selected one, Enter connects to the selected
-  node, `x` disconnects it. Favorites persist in `favorites.json`
+  node, `x` disconnects it, `i` opens that node's own link list (see
+  below). Favorites persist in `favorites.json`
   (gitignored, like `.env` — personal, not project data). Connect/
   disconnect both dial the node's real app_rpt function code
   (`*3<node>`/`*1<node>`) via native IAX2 DTMF signaling (BEGIN/END
@@ -192,6 +194,12 @@ screen instead of connecting blind:
   and confirmed not to work here, since this connection's function-code
   decoder listens for actual DTMF frame events, not in-band tone
   detection on the rxchannel audio.
+- **Node detail screen** (`i`, from a selected connected or favorite
+  node on either of the two screens above): who's linked to *that*
+  node right now — the same thing
+  `stats.allstarlink.org/stats/<node>` shows, fetched here so there's
+  no need to leave the TUI to check it. `r` forces a refresh, `i` or
+  Esc goes back to whichever screen you opened it from.
 - **History screen** (`h`): a log of every node that has connected
   *directly* to yours and when, newest first, with a timestamp and
   whatever callsign/location info was on hand at the time (green `+`

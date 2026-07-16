@@ -334,6 +334,16 @@ class App:
         self.nodes_add_mode = False
         self.nodes_add_buf = ""
 
+        # Who's linked to some OTHER node (self.remote_node) -- the "i"
+        # detail screen, opened from a selected connected/favorite node,
+        # so you don't have to visit stats.allstarlink.org by hand to see
+        # who's on the far end of a link.
+        self.remote_node = None
+        self.remote_return_view = "monitor"
+        self.remote_links = []
+        self.remote_refreshing = False
+        self.last_remote_refresh = 0.0
+
         # Who connected to this node and when -- logged on the node's
         # own Pi (pi_logger/node_link_logger.py), not by this client,
         # so it keeps recording even when maxstar isn't running. This
@@ -520,6 +530,43 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def open_remote(self, node):
+        """Switch to the 'remote' detail screen showing who's linked to
+        `node` (some other node, not necessarily ours) -- same lookup
+        refresh_connected_nodes() does for our own node, just aimed at
+        whichever one the user selected."""
+        self.remote_node = node
+        self.remote_return_view = self.view
+        self.remote_links = []
+        self.last_remote_refresh = 0.0
+        self.view = "remote"
+        self.refresh_remote_links(force=True)
+
+    def refresh_remote_links(self, force=False):
+        """Only relevant while the 'remote' detail screen is open -- like
+        refresh_link_history(), nothing else on screen needs this."""
+        node = self.remote_node
+        if node is None:
+            return
+        due = time.time() - self.last_remote_refresh > \
+            CONNECTED_REFRESH_SECONDS
+        if self.remote_refreshing or not (force or due):
+            return
+        self.remote_refreshing = True
+
+        def worker():
+            try:
+                nodes = fetch_connected_nodes(node)
+                # Guard against the user switching to inspect a different
+                # node while this fetch was still in flight.
+                if self.remote_node == node:
+                    self.remote_links = nodes
+                    self.last_remote_refresh = time.time()
+            finally:
+                self.remote_refreshing = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def run(self):
         curses.set_escdelay(50)  # default ~1000ms makes Esc feel unresponsive;
         # 50ms (vim's usual default) still leaves headroom to distinguish
@@ -568,6 +615,8 @@ class App:
             return self.handle_nodes_key(ch)
         if self.view == "history":
             return self.handle_history_key(ch)
+        if self.view == "remote":
+            return self.handle_remote_key(ch)
         return self.handle_monitor_key(ch)
 
     def handle_monitor_key(self, ch):
@@ -602,6 +651,11 @@ class App:
                 node = self.connected_nodes[
                     self.monitor_selected % len(self.connected_nodes)]
                 self.start_link("disconnect", node["number"])
+        elif ch in (ord("i"), ord("I")):
+            if self.connected_nodes:
+                node = self.connected_nodes[
+                    self.monitor_selected % len(self.connected_nodes)]
+                self.open_remote(node["number"])
         elif ch in (ord("h"), ord("H")):
             self.view = "history"
             self.history_offset = 0
@@ -798,6 +852,19 @@ class App:
         elif ch in (ord("a"), ord("A")):
             self.nodes_add_mode = True
             self.nodes_add_buf = ""
+        elif ch in (ord("i"), ord("I")):
+            kind, node = rows[self.nodes_selected]
+            if kind in ("connected", "favorite") and node:
+                self.open_remote(node)
+        return True
+
+    def handle_remote_key(self, ch):
+        if ch in (ord("q"), ord("Q")):
+            return False
+        elif ch in (27, ord("i"), ord("I")):
+            self.view = self.remote_return_view
+        elif ch in (ord("r"), ord("R")):
+            self.refresh_remote_links(force=True)
         return True
 
     def handle_history_key(self, ch):
@@ -851,6 +918,8 @@ class App:
                 self.draw_nodes()
             elif self.view == "history":
                 self.draw_history()
+            elif self.view == "remote":
+                self.draw_remote()
             else:
                 self.draw_monitor()
         except curses.error:
@@ -921,8 +990,8 @@ class App:
         # (text, attr, selectable_index or None)
         lines = []
         hint_attr = curses.color_pair(CP_DIM) | curses.A_DIM
-        lines.append(("↑/↓ select  Enter connect  x disconnect", hint_attr,
-                       None))
+        lines.append(("↑/↓ select  Enter connect  x disconnect  i info",
+                       hint_attr, None))
         lines.append(("a add  r remove  n/Esc back  q quit", hint_attr,
                        None))
         lines.append(("", 0, None))
@@ -1045,6 +1114,38 @@ class App:
             safe_addstr(stdscr, 2, max(2, width - len(paging) - 3),
                         paging, hint_attr)
 
+    def draw_remote(self):
+        """Who's linked to some other node (self.remote_node) right now --
+        the same info stats.allstarlink.org/stats/<node> shows, fetched
+        here so there's no need to leave the TUI to check it."""
+        self.refresh_remote_links()  # kept fresh while this screen is open
+        stdscr = self.stdscr
+        height, width = stdscr.getmaxyx()
+        draw_box(stdscr, 0, 0, height, width,
+                 title=f"LINKED TO {self.remote_node}")
+        hint_attr = curses.color_pair(CP_DIM) | curses.A_DIM
+        safe_addstr(stdscr, 1, 2, "r refresh  i/Esc back  q quit", hint_attr)
+
+        count = len(self.remote_links)
+        header = f"{count} node{'s' if count != 1 else ''} linked"
+        if self.remote_refreshing:
+            header += "  refreshing..."
+        safe_addstr(stdscr, 2, 2, header,
+                    curses.color_pair(CP_CYAN) | curses.A_BOLD)
+
+        top_row = 4
+        if not self.remote_links:
+            safe_addstr(stdscr, top_row, 2, "(none)",
+                        curses.color_pair(CP_DIM) | curses.A_DIM)
+            return
+        line_width = max(20, width - 6)
+        for i, n in enumerate(self.remote_links):
+            row = top_row + i
+            if row >= height - 1:
+                break
+            text = self._format_node_summary(n["number"], n, line_width)
+            safe_addstr(stdscr, row, 2, text, curses.color_pair(CP_TEXT))
+
     def draw_monitor(self):
         stdscr = self.stdscr
         cfg = self.config
@@ -1111,7 +1212,7 @@ class App:
 
         safe_addstr(stdscr, height - 2, 2,
                     "space ptt  l link  d disc  ↑/↓+x disconnect "
-                    "selected  h history  n nodes  c cfg  q quit",
+                    "selected  i info  h history  n nodes  c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
     def draw_connected_panel(self, top, bottom, width):
