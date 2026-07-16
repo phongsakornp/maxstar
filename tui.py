@@ -35,6 +35,7 @@ from allstarlink_stats import (fetch_node_summary, fetch_connected_nodes,
 ENV_PATH = ".env"
 FAVORITES_PATH = "favorites.json"
 CONNECTED_REFRESH_SECONDS = 15
+LINK_COUNT_REFRESH_SECONDS = 20  # how a node's own link count is kept live
 LINK_GRACE_SECONDS = 30  # > the API's observed worst-case connect/disconnect lag
 
 # Safety net for the spacebar PTT toggle: unlike a real hold-to-talk
@@ -322,6 +323,7 @@ class App:
         self.node_info_cache = {}    # node number -> summary dict / "loading"
         self.fetching_nodes = set()  # node numbers with a fetch in flight
         self.link_count_cache = {}   # node number -> int link count / None
+        self.link_count_last_fetch = {}  # node number -> time.time() of fetch
         self.fetching_link_counts = set()
         self.connected_nodes = []
         self.connected_refreshing = False
@@ -402,15 +404,22 @@ class App:
 
     def fetch_link_count_for(self, node):
         """Populate link_count_cache[node] in the background -- how many
-        nodes `node` itself is currently linked to. Safe to call
-        repeatedly, same guard pattern as fetch_node_info()."""
-        if node in self.link_count_cache or node in self.fetching_link_counts:
+        nodes `node` itself is currently linked to. Unlike fetch_node_info()
+        (whose callsign/location fields barely change), a link count is
+        live state, so this re-fetches every LINK_COUNT_REFRESH_SECONDS
+        instead of caching forever -- otherwise the favorites list and the
+        connected-nodes panel would show whatever count happened to be
+        current the first time each node was seen, never updating again."""
+        due = time.time() - self.link_count_last_fetch.get(node, 0) > \
+            LINK_COUNT_REFRESH_SECONDS
+        if node in self.fetching_link_counts or not due:
             return
         self.fetching_link_counts.add(node)
 
         def worker():
             try:
                 self.link_count_cache[node] = fetch_link_count(node)
+                self.link_count_last_fetch[node] = time.time()
             finally:
                 self.fetching_link_counts.discard(node)
 
@@ -892,11 +901,17 @@ class App:
 
     def _node_line(self, node, max_width=200):
         """For favorites: look up cached info fetched separately, since
-        we only have the bare node number until fetch_node_info() runs."""
+        we only have the bare node number until fetch_node_info() runs.
+        The link count comes from link_count_cache (kept live by periodic
+        fetch_link_count_for() calls), not from node_info_cache's one-shot
+        snapshot -- otherwise it'd show whatever count was current the
+        first time the node was ever looked up and never update again."""
         if node in self.fetching_nodes and node not in self.node_info_cache:
             return f"{node:<8} loading..."
         info = self.node_info_cache.get(node)
-        link_count = info.get("link_count") if info else None
+        link_count = self.link_count_cache.get(node)
+        if link_count is None and info:
+            link_count = info.get("link_count")
         return self._format_node_summary(node, info, max_width, link_count)
 
     def draw_nodes(self):
@@ -933,6 +948,7 @@ class App:
             lines.append(("  (none yet -- press 'a' to add a node)",
                           curses.color_pair(CP_DIM) | curses.A_DIM, None))
         for n in self.favorites:
+            self.fetch_link_count_for(n)  # no-op until due; keeps this live
             lines.append((self._node_line(n, line_width), None, idx))
             idx += 1
         if self.nodes_add_mode:
