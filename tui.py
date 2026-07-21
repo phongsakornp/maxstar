@@ -521,8 +521,15 @@ class App:
                 # with a response that predates it. Re-check here too.
                 if time.time() < self.link_lock_until:
                     return
-                self.connected_nodes = nodes
                 self.last_connected_refresh = time.time()
+                if nodes is None:
+                    # The stats API has nothing for this node right now
+                    # (seen even while it's actively linked, e.g. right
+                    # after a restart with nothing else to fall back on)
+                    # -- keep showing whatever we last knew instead of
+                    # flashing the panel to empty.
+                    return
+                self.connected_nodes = nodes
                 for n in nodes:
                     self.fetch_link_count_for(n["number"])
             finally:
@@ -560,8 +567,13 @@ class App:
                 # Guard against the user switching to inspect a different
                 # node while this fetch was still in flight.
                 if self.remote_node == node:
-                    self.remote_links = nodes
                     self.last_remote_refresh = time.time()
+                    if nodes is not None:
+                        # None means the stats API had nothing for this
+                        # node this cycle (seen even while actively
+                        # linked) -- keep the last-known list instead of
+                        # flashing it to empty.
+                        self.remote_links = nodes
             finally:
                 self.remote_refreshing = False
 

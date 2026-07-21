@@ -38,7 +38,14 @@ def fetch_linked_nodes(node, timeout=5):
             raw = json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
-    data = ((raw.get("stats") or {}).get("data") or {})
+    if raw.get("stats") is None:
+        # A valid response with no "stats" section -- observed even for
+        # a node that's actively linked -- must be treated the same as
+        # a fetch failure (see watch()'s seen/current diff below), not
+        # as "confirmed zero links", or a transient blip logs a false
+        # mass-disconnect followed by a false mass-reconnect.
+        return None
+    data = raw["stats"].get("data") or {}
     linked = data.get("linkedNodes") or []
     result = {}
     for n in linked:
