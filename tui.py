@@ -619,7 +619,16 @@ class App:
     # ---- input ------------------------------------------------------
 
     def handle_key(self, ch):
-        if ch == -1 or ch == curses.KEY_RESIZE:
+        if ch == curses.KEY_RESIZE:
+            # A fast interactive drag-resize can fire several SIGWINCHs
+            # before ncurses' internal diff-update logic fully catches
+            # up, which can leave stale content (e.g. the footer hint
+            # line) behind after a shrink. Force a full, non-incremental
+            # repaint on the next frame instead of trusting the diff.
+            curses.update_lines_cols()
+            self.stdscr.clearok(True)
+            return True
+        if ch == -1:
             return True
         if self.view == "config":
             return self.handle_config_key(ch)
