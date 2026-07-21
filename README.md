@@ -134,6 +134,8 @@ Interactive commands once connected:
 .venv/bin/python3 tui.py
 ```
 
+![maxstar TUI](maxstar.png)
+
 Curses-based UI (stdlib `curses`, no new dependency), styled like a
 rig's control panel (Icom IC-705-ish): bordered panel, a big block-digit
 VFO-style readout for the node number, two RX/TX status badges drawn as
