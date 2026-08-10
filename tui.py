@@ -399,14 +399,20 @@ class App:
 
     def fetch_node_info(self, node):
         """Populate node_info_cache[node] in the background. Safe to call
-        repeatedly -- skips if already cached or a fetch is in flight."""
+        repeatedly -- skips if already cached or a fetch is in flight.
+        A failed/unknown lookup (fetch_node_summary returns None) is NOT
+        cached, so the next call (e.g. reopening the nodes view) retries
+        instead of showing "unknown -- lookup failed" forever after one
+        transient hiccup."""
         if node in self.node_info_cache or node in self.fetching_nodes:
             return
         self.fetching_nodes.add(node)
 
         def worker():
             try:
-                self.node_info_cache[node] = fetch_node_summary(node)
+                info = fetch_node_summary(node)
+                if info is not None:
+                    self.node_info_cache[node] = info
             finally:
                 self.fetching_nodes.discard(node)
 

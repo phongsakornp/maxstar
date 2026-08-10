@@ -8,9 +8,20 @@ No new dependency: urllib is stdlib.
 """
 
 import json
+import threading
 import urllib.request
 
 STATS_URL = "https://stats.allstarlink.org/api/stats/{node}"
+
+# The public stats API has been observed to refuse the connection
+# outright when hit with more than one simultaneous request from the
+# same client (even just 2 at once fails, while sequential calls
+# succeed) -- tui.py fires off a lookup per favorite in parallel
+# threads, so without this lock a single "n" keypress could trip that
+# and leave every favorite stuck showing "unknown -- lookup failed".
+# Serialize all requests through this one lock instead of trusting
+# urllib/the OS to open several sockets to it at once.
+_request_lock = threading.Lock()
 
 
 def fetch_node_stats(node, timeout=5):
@@ -19,8 +30,9 @@ def fetch_node_stats(node, timeout=5):
     'unknown right now' rather than an error to surface loudly."""
     url = STATS_URL.format(node=node)
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        with _request_lock:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
 
