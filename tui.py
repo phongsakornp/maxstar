@@ -92,6 +92,9 @@ CP_RED = 6
 CP_FRAME = 7
 CP_RX_ON = 8   # filled badge (background fill), not just colored text
 CP_TX_ON = 9
+CP_LOCK_ON = 10  # yellow/black -- a caution color, distinct from the
+                 # red "actively transmitting" TX badge so a locked-but-
+                 # idle state is never mistaken for a hot mic
 
 # 5-row-tall block digits for the VFO-style node number readout.
 BIG_DIGITS = {
@@ -125,6 +128,7 @@ def init_colors():
     curses.init_pair(CP_FRAME, curses.COLOR_CYAN, bg)
     curses.init_pair(CP_RX_ON, curses.COLOR_BLACK, curses.COLOR_GREEN)
     curses.init_pair(CP_TX_ON, curses.COLOR_BLACK, curses.COLOR_RED)
+    curses.init_pair(CP_LOCK_ON, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
 
 def read_config():
@@ -226,15 +230,14 @@ def draw_box(stdscr, y0, x0, height, width, title=""):
                     curses.color_pair(CP_CYAN) | curses.A_BOLD)
 
 
-def draw_badge(stdscr, y, x, label, active, on_pair):
-    """A status badge occupying a fixed 6-wide x 3-tall footprint in
-    both states, so it's never actually bigger or smaller -- just a
+def draw_badge(stdscr, y, x, label, active, on_pair, box_w=6):
+    """A status badge occupying a fixed box_w-wide x 3-tall footprint
+    in both states, so it's never actually bigger or smaller -- just a
     dim border outline when inactive vs. a solid color fill (plain
     blanks, no border glyphs mixed in) when active. A solid fill will
     always look visually heavier than a same-size thin-line outline --
     that's just how filled vs. outlined shapes read to the eye, not an
     actual size difference."""
-    box_w = 6
     if active:
         attr = curses.color_pair(on_pair) | curses.A_BOLD
         safe_addstr(stdscr, y, x, " " * box_w, attr)
@@ -318,6 +321,10 @@ class App:
         self.link_busy = False
 
         self.keyed_since = None  # time.time() PTT was toggled on, else None
+        self.tx_locked = True  # when True, space is a no-op -- guards
+                                # against an accidental PTT keypress.
+                                # Starts locked: press t to unlock before
+                                # the first transmit each session.
 
         self.favorites = load_favorites()
         self.node_info_cache = {}    # node number -> summary dict / "loading"
@@ -653,7 +660,12 @@ class App:
         if ch in (ord("q"), ord("Q")):
             return False
         elif ch == ord(" "):
-            self.toggle_ptt()
+            if self.tx_locked:
+                self.link_status = "TX locked -- press t to unlock"
+            else:
+                self.toggle_ptt()
+        elif ch in (ord("t"), ord("T")):
+            self.toggle_tx_lock()
         elif ch in (ord("c"), ord("C")):
             self.view = "config"
             self.selected = 0
@@ -710,6 +722,18 @@ class App:
         else:
             self.call.key()
             self.keyed_since = time.time()
+
+    def toggle_tx_lock(self):
+        self.tx_locked = not self.tx_locked
+        if self.tx_locked:
+            # Never leave the mic open on lock, even if PTT happened to
+            # already be keyed the instant lock was pressed.
+            if self.call and self.call.keyed.is_set():
+                self.call.unkey()
+            self.keyed_since = None
+            self.link_status = "TX locked"
+        else:
+            self.link_status = "TX unlocked"
 
     def check_tx_timeout(self):
         """Safety net for the toggle-style PTT: a toggle has no release
@@ -1197,16 +1221,29 @@ class App:
 
         keyed = bool(self.call and self.call.keyed.is_set())
         rx_instant = self.call.rx_level if self.call else 0
-        tx_instant = self.call.tx_level if self.call else 0
+        # Locked means transmit is impossible, so the TX meter should
+        # read as flat-off, not just decaying from whatever the mic
+        # happened to be picking up the instant lock was pressed.
+        tx_instant = 0 if self.tx_locked else (
+            self.call.tx_level if self.call else 0)
         self.rx_display = max(rx_instant, self.rx_display * METER_DECAY)
-        self.tx_display = max(tx_instant, self.tx_display * METER_DECAY)
+        self.tx_display = 0 if self.tx_locked else max(
+            tx_instant, self.tx_display * METER_DECAY)
 
         # Two real, filled badges instead of one small toggling label --
         # RX lights up on actual received audio (not just "not
         # transmitting"), TX on the real keyed state.
         rx_active = self.rx_display > RX_ACTIVE_THRESHOLD
         draw_badge(stdscr, 4, 28, "RX", rx_active, CP_RX_ON)
-        draw_badge(stdscr, 4, 36, "TX", keyed, CP_TX_ON)
+        if self.tx_locked:
+            # Same slot as the normal TX badge -- that's the spot a
+            # user already glances at to check "am I about to
+            # transmit", so overriding it here (distinct yellow/black
+            # "LOCKED" instead of red/black "TX") is the most obvious
+            # place to put this rather than a separate indicator.
+            draw_badge(stdscr, 4, 36, "LOCKED", True, CP_LOCK_ON, box_w=8)
+        else:
+            draw_badge(stdscr, 4, 36, "TX", keyed, CP_TX_ON)
         if self.keyed_since is not None:
             remaining = max(
                 0, TX_TIMEOUT_SECONDS - (time.time() - self.keyed_since))
@@ -1215,7 +1252,8 @@ class App:
                 if remaining <= 15 else curses.color_pair(CP_YELLOW)
             safe_addstr(stdscr, 5, 44, f"{mins}:{secs:02d}", countdown_attr)
         self.rx_peak = max(rx_instant, self.rx_peak * PEAK_DECAY)
-        self.tx_peak = max(tx_instant, self.tx_peak * PEAK_DECAY)
+        self.tx_peak = 0 if self.tx_locked else max(
+            tx_instant, self.tx_peak * PEAK_DECAY)
 
         meter_width = max(20, min(width - 24, METER_MAX_WIDTH))
         draw_meter(stdscr, 10, 2, meter_width, self.rx_display,
@@ -1235,10 +1273,22 @@ class App:
             safe_addstr(stdscr, 16, 2, f"» {self.link_status}",
                         curses.color_pair(CP_GREEN))
 
-        self.draw_connected_panel(18, height - 3, width)
+        # Reserve a couple of rows above the footer for the lock banner
+        # when locked, so it sits near the bottom command hints with a
+        # blank line of separation rather than butting right up
+        # against them.
+        panel_bottom = height - 3 - (2 if self.tx_locked else 0)
+        self.draw_connected_panel(18, panel_bottom, width)
+
+        if self.tx_locked:
+            safe_addstr(stdscr, height - 4, 2,
+                        "TX LOCKED -- press t to unlock",
+                        curses.color_pair(CP_LOCK_ON) | curses.A_BOLD)
 
         safe_addstr(stdscr, height - 2, 2,
-                    "space ptt  l link  d disc  ↑/↓+x disconnect "
+                    "space ptt  t "
+                    + ("unlock" if self.tx_locked else "lock")
+                    + "  l link  d disc  ↑/↓+x disconnect "
                     "selected  i info  h history  n nodes  c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)
 
