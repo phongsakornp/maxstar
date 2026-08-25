@@ -95,6 +95,12 @@ CP_TX_ON = 9
 CP_LOCK_ON = 10  # yellow/black -- a caution color, distinct from the
                  # red "actively transmitting" TX badge so a locked-but-
                  # idle state is never mistaken for a hot mic
+CP_MUTE_ON = 11  # gray/black -- distinct from both TX colors above
+                 # since muting is an RX-side, non-alarming state
+GRAY_256 = 250  # xterm 256-color light gray -- plain curses.COLOR_*
+                # has no gray, and black-on-light-gray keeps "MUTED"
+                # readable (a light bg needs dark text, not white, for
+                # contrast)
 
 # 5-row-tall block digits for the VFO-style node number readout.
 BIG_DIGITS = {
@@ -129,6 +135,15 @@ def init_colors():
     curses.init_pair(CP_RX_ON, curses.COLOR_BLACK, curses.COLOR_GREEN)
     curses.init_pair(CP_TX_ON, curses.COLOR_BLACK, curses.COLOR_RED)
     curses.init_pair(CP_LOCK_ON, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+    try:
+        if curses.COLORS >= 256:
+            curses.init_pair(CP_MUTE_ON, curses.COLOR_BLACK, GRAY_256)
+        else:
+            raise curses.error
+    except curses.error:
+        # No gray in the base 8/16-color palette -- white is the
+        # closest fallback available everywhere.
+        curses.init_pair(CP_MUTE_ON, curses.COLOR_BLACK, curses.COLOR_WHITE)
 
 
 def read_config():
@@ -325,6 +340,10 @@ class App:
                                 # against an accidental PTT keypress.
                                 # Starts locked: press t to unlock before
                                 # the first transmit each session.
+        self.rx_muted = False  # when True, decoded RX audio is discarded
+                                # instead of played -- meter/badge still
+                                # track real traffic, only the speaker
+                                # is silenced.
 
         self.favorites = load_favorites()
         self.node_info_cache = {}    # node number -> summary dict / "loading"
@@ -380,6 +399,7 @@ class App:
         call = IaxCall(cfg["MAXSTAR_HOST"], int(cfg["MAXSTAR_PORT"]),
                        cfg["MAXSTAR_USER"], cfg["MAXSTAR_SECRET"],
                        cfg["MAXSTAR_NODE"], cfg["MAXSTAR_CONTEXT"])
+        call.rx_muted = self.rx_muted
         self.call = call
         self.keyed_since = None
 
@@ -666,6 +686,8 @@ class App:
                 self.toggle_ptt()
         elif ch in (ord("t"), ord("T")):
             self.toggle_tx_lock()
+        elif ch in (ord("m"), ord("M")):
+            self.toggle_rx_mute()
         elif ch in (ord("c"), ord("C")):
             self.view = "config"
             self.selected = 0
@@ -734,6 +756,12 @@ class App:
             self.link_status = "TX locked"
         else:
             self.link_status = "TX unlocked"
+
+    def toggle_rx_mute(self):
+        self.rx_muted = not self.rx_muted
+        if self.call:
+            self.call.rx_muted = self.rx_muted
+        self.link_status = "RX muted" if self.rx_muted else "RX unmuted"
 
     def check_tx_timeout(self):
         """Safety net for the toggle-style PTT: a toggle has no release
@@ -1234,7 +1262,14 @@ class App:
         # RX lights up on actual received audio (not just "not
         # transmitting"), TX on the real keyed state.
         rx_active = self.rx_display > RX_ACTIVE_THRESHOLD
-        draw_badge(stdscr, 4, 28, "RX", rx_active, CP_RX_ON)
+        if self.rx_muted:
+            # Same slot/pattern as the TX LOCKED override below -- the
+            # meter still moves on real traffic, but the badge itself
+            # must say MUTED so it's never mistaken for silence on the
+            # channel.
+            draw_badge(stdscr, 4, 28, "MUTED", True, CP_MUTE_ON, box_w=8)
+        else:
+            draw_badge(stdscr, 4, 28, "RX", rx_active, CP_RX_ON)
         if self.tx_locked:
             # Same slot as the normal TX badge -- that's the spot a
             # user already glances at to check "am I about to
@@ -1288,6 +1323,7 @@ class App:
         safe_addstr(stdscr, height - 2, 2,
                     "space ptt  t "
                     + ("unlock" if self.tx_locked else "lock")
+                    + "  m " + ("unmute" if self.rx_muted else "mute")
                     + "  l link  d disc  ↑/↓+x disconnect "
                     "selected  i info  h history  n nodes  c cfg  q quit",
                     curses.color_pair(CP_DIM) | curses.A_DIM)

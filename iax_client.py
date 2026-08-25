@@ -227,6 +227,11 @@ class IaxCall:
         self._out_buf = b""
         self._voice_anchor_sent = False
 
+        # UI-level mute: still tracks rx_level/peak below so the RX meter
+        # and badge keep showing real traffic, just discards the decoded
+        # audio instead of queueing it for playback.
+        self.rx_muted = False
+
         self._recv_thread = None
         self._tx_thread = None
         self._out_stream = None
@@ -430,7 +435,8 @@ class IaxCall:
         if self.selftest:
             print(f"    [RX-AUDIO] frame#{self.rx_audio_frames} "
                   f"bytes={len(ulaw_bytes)} peak={peak}")
-        self._out_queue.put(pcm16)
+        if not self.rx_muted:
+            self._out_queue.put(pcm16)
 
     def start_audio(self):
         def out_callback(outdata, frames, time_info, status):
