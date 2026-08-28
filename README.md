@@ -3,12 +3,33 @@
 A minimal, hand-rolled IAX2 client (`iax_client.py`) for connecting to an
 AllStarLink node from a Mac without any radio hardware or third-party
 softphone. Built because Zoiper Classic is discontinued, Zoiper 5 gates
-setup behind a cloud-account wizard with no Thailand provider, and
-droidstar-enhanced's PTT doesn't speak app_rpt's actual keying protocol.
+setup behind a cloud-account wizard, and droidstar-enhanced's PTT
+doesn't speak app_rpt's actual keying protocol.
 
 Named after the Pi hosting the node + AllStar. A UI is planned, and a
 radio module may be attached to the Pi later; this client is meant to
 keep working as the control surface either way.
+
+## Node vs. terminal (client)
+
+It's easy to conflate "the node" with "the software that connects to it" — worth spelling out explicitly since this project only makes sense once the two are separated.
+
+The Pi (your node) is the actual AllStarLink node: it runs Asterisk + app_rpt, and that's what has a node number, registers on the AllStarLink network, and gets a classification on stats.allstarlink.org. Since it has no radio hardware attached, that classification is **Hub, Terminal user only** — "Hub" meaning no RF (the node's radio input is otherwise empty), "Terminal user only" meaning that empty radio input is meant to be filled by one human connecting through a client app, not by linking other repeater nodes into it.
+
+`maxstar` is the terminal — the client half. It doesn't turn the Pi's node into anything; it just occupies the one radio seat the Hub node is waiting to have filled, supplying real mic/speaker audio in/out over IAX2. Both halves are required: the Pi's Asterisk/app_rpt provides the node identity and network presence, `maxstar` provides the actual audio path a human uses. Zoiper, DVSwitch Mobile, and RepeaterPhone's "Node" auth mode (see below) all fill the same terminal role `maxstar` does — they're interchangeable clients for the same node-side setup.
+
+That radio seat is single-occupancy — connecting a second client authenticates and immediately hangs up the first, rather than letting two people talk together (see "Single-seat connections" below). This is structural to app_rpt (one `rxchannel` per node), not a `maxstar`-specific limitation. Getting someone else to actually talk with you requires linking two separate nodes together, not a second client connection to the same one.
+
+### RepeaterPhone comparison
+
+RepeaterPhone (iOS) is sometimes assumed to remove the need for a Pi entirely, but that depends on which of its two auth modes is used:
+
+- **"Node" auth** (IAX username/password from a node owner) is the same model as `maxstar` — a terminal client dialing into someone's existing, self-hosted node. Pointed at your node, it would behave exactly like `maxstar` does: same single-seat rules, still requires the Pi to be running.
+- **"Account" auth** (AllStarLink web portal login) uses AllStarLink's own hosted infrastructure to hand the user a personal node with no self-hosted Asterisk instance needed. This is the mode that actually needs no Pi — but the node still exists, just hosted by AllStarLink's servers instead of a Pi you run yourself.
+
+So RepeaterPhone doesn't eliminate the node/terminal split — it just offers a second option for who hosts the node half.
+
+Node-to-node links — what gives a busy hub node its many simultaneously connected nodes — are a separate mechanism from the terminal connection `maxstar` uses, authenticated by the node's own dialplan rather than a per-user IAX account. `maxstar` doesn't participate in or configure that path at all; it only ever acts as a single terminal client filling the one radio seat described above.
 
 ## Setup
 
@@ -66,15 +87,15 @@ control this (it used to have a `t`-key toggle, since removed — the
 default below is what everyone should hear, and toggling it live was
 more likely to cause confusion than help).
 
-This node's default is set to **off** via `telemdefault = 0` in
-`/etc/asterisk/rpt.conf`'s `[node-main]` template (`0` = telemetry
-output off; `2`, the stock default, is "timed telemetry output on
-command execution and for a short time thereafter" — the announcement
-that used to fire on every connect/disconnect). That default only
-takes effect when app_rpt itself (re)initializes — Asterisk restarting
-or the module reloading — not when any client connects/disconnects,
-so it stays off across every maxstar/Zoiper/etc. session without
-either of them doing anything.
+Set this to **off** via `telemdefault = 0` in `/etc/asterisk/rpt.conf`'s
+`[node-main]` template (`0` = telemetry output off; `2`, the stock
+default, is "timed telemetry output on command execution and for a
+short time thereafter" — the announcement that fires on every
+connect/disconnect otherwise). That default only takes effect when
+app_rpt itself (re)initializes — Asterisk restarting or the module
+reloading — not when any client connects/disconnects, so once set it
+stays off across every maxstar/Zoiper/etc. session without either of
+them doing anything.
 
 To turn it on or off for a live session (reverts to the `rpt.conf`
 default on the next Asterisk restart/module reload), send the DTMF
@@ -94,10 +115,10 @@ choice but actually sets a different, special always-on sentinel value
 that doesn't match the real announcement — confirmed against app_rpt's
 own source, `rpt_config.c`/`rpt_functions.c`. Use `cop,35`/`cop,34`.)
 These three function codes aren't in app_rpt's default functions
-table; they were uncommented in this node's `rpt.conf`
-(`933`/`934`/`935` = `cop,33`/`cop,34`/`cop,35`) and the module
-reloaded (`asterisk -rx "module reload app_rpt.so"`) before they'd
-respond to DTMF at all.
+table; uncomment them in your node's `rpt.conf`
+(`933`/`934`/`935` = `cop,33`/`cop,34`/`cop,35`) and reload the module
+(`asterisk -rx "module reload app_rpt.so"`) before they'll respond to
+DTMF at all.
 
 To change the persistent default instead of a one-off session toggle,
 edit `telemdefault` in `/etc/asterisk/rpt.conf` and reload:
@@ -191,11 +212,10 @@ screen instead of connecting blind:
   (gitignored, like `.env` — personal, not project data). Connect/
   disconnect both dial the node's real app_rpt function code
   (`*3<node>`/`*1<node>`) via native IAX2 DTMF signaling (BEGIN/END
-  frame pairs) — confirmed against this node's own `rpt.conf` functions
-  table rather than assumed. Not audio-tone DTMF: that was tried first
-  and confirmed not to work here, since this connection's function-code
-  decoder listens for actual DTMF frame events, not in-band tone
-  detection on the rxchannel audio.
+  frame pairs) — confirmed against app_rpt's own functions table rather
+  than assumed. Not audio-tone DTMF: that was tried first and doesn't
+  work, since app_rpt's function-code decoder listens for actual DTMF
+  frame events, not in-band tone detection on the rxchannel audio.
 - **Node detail screen** (`i`, from a selected connected or favorite
   node on either of the two screens above): who's linked to *that*
   node right now — the same thing
@@ -220,9 +240,9 @@ screen instead of connecting blind:
   only touch a file already owned by the SSH user. Because the logger
   only ever asks `stats.allstarlink.org` for *your* node's own
   `linkedNodes`, it only ever sees direct links to your node — a node
-  connected to one of your links (e.g. some third node linked to
-  `68777`, which is itself linked to you) is never logged, only
-  `68777` itself would be.
+  connected to one of your links (e.g. some third node linked to a
+  node that's itself linked to you) is never logged, only that
+  intermediate node itself would be.
 
 `iax_client.py`'s own `print()` diagnostics are silenced while the TUI
 is running (they'd otherwise corrupt curses' control of the screen) —
@@ -244,14 +264,14 @@ invokes this same flag remotely.
 Deploy it once per Pi:
 
 ```bash
-ssh asl@maxwell 'mkdir -p ~/maxstar-logger ~/.config/systemd/user'
-scp pi_logger/node_link_logger.py asl@maxwell:~/maxstar-logger/
+ssh asl@your-pi-host 'mkdir -p ~/maxstar-logger ~/.config/systemd/user'
+scp pi_logger/node_link_logger.py asl@your-pi-host:~/maxstar-logger/
 scp pi_logger/node-link-logger.service \
-    asl@maxwell:~/.config/systemd/user/
+    asl@your-pi-host:~/.config/systemd/user/
 # Edit YOUR_NODE_NUMBER in the copied .service file to your real node
 # number first (kept out of this repo deliberately -- see below).
-ssh asl@maxwell '\
-  sed -i "s/YOUR_NODE_NUMBER/42865/" \
+ssh asl@your-pi-host '\
+  sed -i "s/YOUR_NODE_NUMBER/12345/" \
       ~/.config/systemd/user/node-link-logger.service && \
   systemctl --user daemon-reload && \
   systemctl --user enable --now node-link-logger'
