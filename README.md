@@ -6,15 +6,15 @@ softphone. Built because Zoiper Classic is discontinued, Zoiper 5 gates
 setup behind a cloud-account wizard, and droidstar-enhanced's PTT
 doesn't speak app_rpt's actual keying protocol.
 
-Named after the Pi hosting the node + AllStar. A UI is planned, and a
-radio module may be attached to the Pi later; this client is meant to
-keep working as the control surface either way.
+The name comes from James Clerk Maxwell, plus AllStar. A UI is
+planned, and a radio module may be attached to the Pi later; this
+client is meant to keep working as the control surface either way.
 
 ## Node vs. terminal (client)
 
 It's easy to conflate "the node" with "the software that connects to it" — worth spelling out explicitly since this project only makes sense once the two are separated.
 
-The Pi (your node) is the actual AllStarLink node: it runs Asterisk + app_rpt, and that's what has a node number, registers on the AllStarLink network, and gets a classification on stats.allstarlink.org. Since it has no radio hardware attached, that classification is **Hub, Terminal user only** — "Hub" meaning no RF (the node's radio input is otherwise empty), "Terminal user only" meaning that empty radio input is meant to be filled by one human connecting through a client app, not by linking other repeater nodes into it.
+The Pi (your node) is the actual AllStarLink node: it runs Asterisk + app_rpt, and that's what has a node number, registers on the AllStarLink network, and gets a classification on stats.allstarlink.org. Since it has no radio hardware attached, that classification is **Hub, Terminal user only** — "Hub" meaning no RF (the node's radio input is otherwise empty), "Terminal user only" describing what that empty input is *for*: a single person connecting through a client app, as opposed to a hub whose main purpose is interlinking many other repeater nodes together. It's a label about intended use, not a technical restriction — node-to-node linking is still a separate, available mechanism (see below).
 
 `maxstar` is the terminal — the client half. It doesn't turn the Pi's node into anything; it just occupies the one radio seat the Hub node is waiting to have filled, supplying real mic/speaker audio in/out over IAX2. Both halves are required: the Pi's Asterisk/app_rpt provides the node identity and network presence, `maxstar` provides the actual audio path a human uses. Zoiper, DVSwitch Mobile, and RepeaterPhone's "Node" auth mode (see below) all fill the same terminal role `maxstar` does — they're interchangeable clients for the same node-side setup.
 
