@@ -25,9 +25,9 @@ That radio seat is single-occupancy — connecting a second client authenticates
 RepeaterPhone (iOS) is sometimes assumed to remove the need for a Pi entirely, but that depends on which of its two auth modes is used:
 
 - **"Node" auth** (IAX username/password from a node owner) is the same model as `maxstar` — a terminal client dialing into someone's existing, self-hosted node. Pointed at your node, it would behave exactly like `maxstar` does: same single-seat rules, still requires the Pi to be running.
-- **"Account" auth** (AllStarLink web portal login) uses AllStarLink's own hosted infrastructure to hand the user a personal node with no self-hosted Asterisk instance needed. This is the mode that actually needs no Pi — but the node still exists, just hosted by AllStarLink's servers instead of a Pi you run yourself.
+- **"Account" auth** (AllStarLink web portal login) is "web transceiver" mode. The app gets a token from allstarlink.org and calls the target node directly; the target node checks that token with allstarlink.org (the stock `[allstar-public]` dialplan context does this) and connects you as a web-transceiver user. No node of your own is needed, but the target node must allow web-transceiver access and be reachable from the internet — a node behind CGNAT or without port-forwarding can't accept it.
 
-So RepeaterPhone doesn't eliminate the node/terminal split — it just offers a second option for who hosts the node half.
+So account mode does let you skip running a node — but only as a client of someone else's publicly reachable node. Having your own node identity, which node-to-node links need, still means running a node such as the Pi.
 
 Node-to-node links — what gives a busy hub node its many simultaneously connected nodes — are a separate mechanism from the terminal connection `maxstar` uses, authenticated by the node's own dialplan rather than a per-user IAX account. `maxstar` doesn't participate in or configure that path at all; it only ever acts as a single terminal client filling the one radio seat described above.
 
